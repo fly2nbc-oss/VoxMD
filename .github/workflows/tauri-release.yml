@@ -105,7 +105,7 @@ jobs:
 
             | Platform | Files |
             |----------|------|
-            | Windows  | **Portable** `VoxMD_*_Windows_x86_64_portable.exe` — no installer; **MSI**, **NSIS** setup `.exe` in release assets |
+            | Windows  | **Portable** `VoxMD.exe` — no installer; **MSI**, **NSIS** setup `.exe` in release assets |
             | Linux    | `.AppImage` or `.deb` |
 
             Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
@@ -119,10 +119,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force portable-dist | Out-Null
-          $pkg = node -pe "JSON.parse(require('fs').readFileSync('package.json','utf8')).version"
-          Copy-Item "$env:CARGO_TARGET_DIR/release/voxmd.exe" `
-            "portable-dist/VoxMD_${pkg}_Windows_x86_64_portable.exe"
-          Get-Item "portable-dist/VoxMD_${pkg}_Windows_x86_64_portable.exe"
+          Copy-Item "$env:CARGO_TARGET_DIR/release/voxmd.exe" "portable-dist/VoxMD.exe"
+          Get-Item "portable-dist/VoxMD.exe"
 
       - name: Generate SHA256SUMS (Linux)
         if: matrix.platform == 'ubuntu-24.04'
@@ -181,6 +179,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: |
             SHA256SUMS-${{ matrix.sha_suffix }}.txt
-            portable-dist/VoxMD_*_Windows_x86_64_portable.exe
+            portable-dist/VoxMD.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
