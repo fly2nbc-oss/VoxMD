@@ -5,9 +5,7 @@ rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
 
+# macOS-only flags are set in GitHub Actions (CFLAGS break Linux builds if global).
 [env]
 MACOSX_DEPLOYMENT_TARGET = "10.15"
 CMAKE_OSX_DEPLOYMENT_TARGET = "10.15"
-CFLAGS = "-mmacosx-version-min=10.15"
-CXXFLAGS = "-mmacosx-version-min=10.15"
-CMAKE_ARGS = "-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15"
