@@ -1,16 +1,16 @@
 ---
 name: Feature Request
-about: Neues Feature vorschlagen
+about: Suggest a new feature
 title: "[Feature] "
 labels: enhancement
 assignees: ''
 ---
 
 **Problem / Motivation**
-Welches Problem soll das Feature lösen?
+What problem should this feature solve?
 
-**Vorgeschlagene Lösung**
+**Proposed Solution**
 
-**Alternativen**
+**Alternatives Considered**
 
-**Zusätzlicher Kontext**
+**Additional Context**

@@ -37,7 +37,7 @@ fn decode_buffer_ref(buf: AudioBufferRef<'_>) -> Result<Vec<f32>, String> {
     let all = sample_buf.samples();
     let channels = spec.channels.count();
     if channels == 0 {
-        return Err("Keine Audiokanäle".to_string());
+        return Err("No audio channels".to_string());
     }
     if channels == 1 {
         return Ok(all.to_vec());
@@ -54,7 +54,7 @@ fn decode_buffer_ref(buf: AudioBufferRef<'_>) -> Result<Vec<f32>, String> {
     Ok(mono)
 }
 
-/// Liest Audio mit Symphonia und liefert mono f32 @ 16 kHz für whisper.cpp
+/// Reads audio with Symphonia and returns mono f32 @ 16 kHz for whisper.cpp.
 pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
 
@@ -75,11 +75,11 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
         .find(|t| {
             t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some()
         })
-        .ok_or_else(|| "Kein nutzbarer Audio-Track".to_string())?;
+        .ok_or_else(|| "No usable audio track".to_string())?;
     let sample_rate = track
         .codec_params
         .sample_rate
-        .ok_or_else(|| "Unbekannte Sample-Rate".to_string())?;
+        .ok_or_else(|| "Unknown sample rate".to_string())?;
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
@@ -112,7 +112,7 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     }
 
     if samples_mono.is_empty() {
-        return Err("Keine Audiodaten erkannt".to_string());
+        return Err("No audio data detected".to_string());
     }
 
     Ok(resample_linear(&samples_mono, sample_rate, TARGET_RATE))

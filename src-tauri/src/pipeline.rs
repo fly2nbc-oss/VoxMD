@@ -176,7 +176,7 @@ async fn llm_stage(
 
     let md_path = get_md_path(&job.path, &job.meta_title, &job.meta_year);
     let content = format!(
-        "# {}\n\n{summary_block}## Originaltranskript\n\n{transcript}\n",
+        "# {}\n\n{summary_block}## Original Transcript\n\n{transcript}\n",
         job.meta_title
     );
 
@@ -236,7 +236,7 @@ fn overall_snapshot(done: &Arc<AtomicUsize>, total: usize) -> OverallProgress {
     }
 }
 
-/// Parallele Pipeline: während LLM Datei _n_ bearbeitet, läuft Whisper auf _n+1_.
+/// Parallel pipeline: Whisper processes file _n+1_ while LLM handles file _n_.
 pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> Result<(), String> {
     cfg.validate_for_run()?;
 

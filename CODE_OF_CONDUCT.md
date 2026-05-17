@@ -1,35 +1,34 @@
 # Contributor Covenant Code of Conduct
 
-## Unsere Verpflichtung
+## Our Pledge
 
-Wir als Mitwirkende und Maintainer versuchen, eine offene und einladende Community zu fördern, und verpflichten uns, die Teilnahme am Projekt und der Community für jeden zu ermöglichen – unabhängig von Alter, Körpergröße, Behinderung, Ethnie, Geschlechtsmerkmalen, Geschlechtsidentität und -ausdruck, Erfahrungsgrad, Bildung, sozioökonomischem Status, Nationalität, persönlichem Aussehen, Rasse, Religion oder sexueller Identität und Orientierung.
+We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, religion, or sexual identity and orientation.
 
-## Unsere Standards
+## Our Standards
 
-Beispiele für Verhalten, das zur Schaffung einer positiven Umgebung beiträgt:
+Examples of behavior that contributes to a positive environment:
 
-- Freundliche und inklusive Sprache verwenden
-- Unterschiedliche Standpunkte und Erfahrungen respektieren
-- Konstruktive Kritik höflich annehmen
-- Verantwortung gegenüber der Community übernehmen
-- Einfühlungsvermögen gegenüber anderen Community-Mitgliedern zeigen
+- Using welcoming and inclusive language
+- Being respectful of differing viewpoints and experiences
+- Gracefully accepting constructive criticism
+- Showing empathy towards other community members
 
-Beispiele für inakzeptables Verhalten:
+Examples of unacceptable behavior:
 
-- Die Verwendung sexualisierter Sprache oder Bilder oder unwillkommene sexuelle Aufmerksamkeit
-- Trolling, beleidigende/abwertende Kommentare und persönliche oder politische Angriffe
-- Öffentliche oder private Belästigung
-- Veröffentlichung privater Informationen anderer ohne ausdrückliche Erlaubnis
-- Anderes Verhalten, das in einem professionellen Umfeld unangemessen wäre
+- The use of sexualized language or imagery and unwelcome sexual attention or advances
+- Trolling, insulting/derogatory comments, and personal or political attacks
+- Public or private harassment
+- Publishing others' private information without explicit permission
+- Other conduct which could reasonably be considered inappropriate in a professional setting
 
 ## Scope
 
-Dieser Verhaltenskodex gilt in allen Projektbereichen und auch, wenn einzelne die öffentliche Community offiziell vertreten (z. B. über Social Media oder als Delegierte).
+This Code of Conduct applies within all project spaces and also when an individual is officially representing the project in public spaces.
 
-## Durchsetzung
+## Enforcement
 
-Verstöße können dem Projektteam gemeldet werden. Alle Beschwerden werden geprüft und untersucht.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers. All complaints will be reviewed and investigated.
 
-Dieser Kodex basiert auf der [Contributor Covenant][homepage], Version 1.4, verfügbar unter https://www.contributor-covenant.org/version/1/4/code-of-conduct.html
+This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 2.1, available at https://www.contributor-covenant.org/version/2/1/code_of_conduct.html
 
 [homepage]: https://www.contributor-covenant.org

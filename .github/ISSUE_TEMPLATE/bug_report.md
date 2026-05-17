@@ -1,27 +1,27 @@
 ---
 name: Bug Report
-about: Fehler melden
+about: Report a bug
 title: "[Bug] "
 labels: bug
 assignees: ''
 ---
 
-**Beschreibung**
-Ein klarer, prägnanter Satz zum Fehler.
+**Description**
+A clear, concise description of the bug.
 
-**Schritte zur Reproduktion**
+**Steps to Reproduce**
 1. …
 2. …
-3. Fehler tritt auf
+3. Bug occurs
 
-**Erwartetes Verhalten**
+**Expected Behavior**
 
-**Tatsächliches Verhalten**
+**Actual Behavior**
 
 **Screenshots**
 
-**Umgebung**
-- VoxMD-Version:
-- Betriebssystem:
-- Whisper-Modell:
+**Environment**
+- VoxMD version:
+- Operating system:
+- Whisper model:
 - GPU / Vulkan:

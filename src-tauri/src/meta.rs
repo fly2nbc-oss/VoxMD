@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 pub const AUDIO_EXTENSIONS: &[&str] =
     &["mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus"];
 
-/// Entfernt ungültige Windows-Zeichen analog zum Python-Skript.
+/// Strips characters invalid in Windows filenames.
 pub fn sanitize_filename(filename: &str) -> String {
     let invalid = r#"<>:\"/\\|?*"#;
     filename

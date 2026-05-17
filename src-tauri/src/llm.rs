@@ -7,44 +7,44 @@ use async_openai::Client;
 
 use crate::config::AppConfig;
 
-const SYSTEM_PROMPT: &str = r#"Deine Aufgabe: Ein Rohtranskript (ohne Sprecherangaben) in ein Transkript mit Sprecherbezeichnungen umwandeln.
+const SYSTEM_PROMPT: &str = r#"Your task: Convert a raw transcript (without speaker labels) into a transcript with speaker designations.
 
-Anweisungen:
-1. Erkenne Sprecherwechsel aus dem Kontext (Themenwechsel, Anrede, Frage/Antwort, typische Formulierungen).
-2. Namen nur verwenden, wenn sie im Rohtext eindeutig als Personennamen vorkommen. Keine Nachnamen raten.
-3. Im Zweifel: ausschließlich neutrale Bezeichnungen wie "Sprecher 1", "Sprecher 2" (fortlaufend).
-4. Keine generischen Rollen wie "Interviewer", "Gast" – außer sie stehen wörtlich im Text.
-5. Behalte jeden Zeitstempel [HH:MM:SS] exakt bei und setze ihn an den Anfang der Ausgabezeile.
-6. Ausgabeformat: Genau eine Zeile pro Äußerung im Format:
-   [HH:MM:SS] **Bezeichnung:** Der gesagte Text.
-7. Wichtig: Gib das gesamte übergebene Rohtranskript vollständig wieder – kürzen ist nicht erlaubt."#;
+Instructions:
+1. Identify speaker changes from context (topic shifts, forms of address, question/answer patterns, typical phrasing).
+2. Use names only if they appear unambiguously as personal names in the raw text. Do not guess last names.
+3. When in doubt: use only neutral labels such as "Speaker 1", "Speaker 2" (sequential).
+4. No generic roles like "Interviewer", "Guest" — unless they appear verbatim in the text.
+5. Preserve every timestamp [HH:MM:SS] exactly and place it at the beginning of the output line.
+6. Output format: Exactly one line per utterance in the format:
+   [HH:MM:SS] **Label:** The spoken text.
+7. Important: Reproduce the entire raw transcript passed to you completely — truncation is not allowed."#;
 
-const SYSTEM_PROMPT_CONT: &str = r#"Fortsetzung: Du bekommst den nächsten Abschnitt eines Rohtranskripts.
+const SYSTEM_PROMPT_CONT: &str = r#"Continuation: You are receiving the next section of a raw transcript.
 
-WICHTIG – Konsistenz der Sprecher:
-- Verwende für bereits eingeführte Personen dieselbe Bezeichnung wie im vorherigen Abschnitt.
-- Neue Person: nur echten Namen verwenden, wenn klar genannt; sonst nächste freie neutrale Bezeichnung.
-- Behalte jeden Zeitstempel [HH:MM:SS] exakt bei.
+IMPORTANT — Speaker consistency:
+- Use the same label for people already introduced in the previous section.
+- New person: only use a real name if clearly stated; otherwise use the next available neutral label.
+- Preserve every timestamp [HH:MM:SS] exactly.
 
-Gib nur diesen Abschnitt vollständig im Format [HH:MM:SS] **Bezeichnung:** Text aus, ohne Einleitung."#;
+Output only this section completely in the format [HH:MM:SS] **Label:** Text, without any introduction."#;
 
-const SYSTEM_PROMPT_SUMMARY: &str = r#"Erstelle aus dem folgenden Transkript eine strukturierte Zusammenfassung und extrahiere Zitate.
+const SYSTEM_PROMPT_SUMMARY: &str = r#"Create a structured summary from the following transcript and extract quotes.
 
-Anweisungen:
-    Fokus: Extrahiere ausschließlich die Kernaussagen. Ignoriere Smalltalk und Werbung.
-    Struktur: Verwende genau diese Markdown-Gliederung:
-        ## Metadaten
-        Datum der Folge/Veröffentlichung, Episodennummer. Wenn nichts genannt: "Keine Metadaten genannt."
-        ## Zusammenfassung in einem Satz
-        Worum geht es im Kern? Ein einziger prägnanter Satz.
-        ## Die wichtigsten Thesen & Erkenntnisse
-        Bullet Points mit den Kernaussagen.
-        ## Daten & Fakten
-        Alle signifikanten Zahlen, Statistiken oder Termine.
-        ## Wichtigste Zitate
-        Wähle 5 bis 10 Zitate, die außergewöhnliche Daten, konkrete Fakten oder besonders prägnante Aussagen enthalten. Wiedergebe jedes Zitat wörtlich. Pro Zitat eine Zeile im Format: **Bezeichnung:** "wörtliches Zitat" – die Bezeichnung exakt aus dem Transkript übernehmen (keine Namen erfinden; bei neutralen Labels diese verwenden).
-    Stil: Sachlich, prägnant, informativ. Keine Füllwörter.
-    Limit: Zusammenfassung maximal ca. 800 Wörter; Zitate wörtlich aus dem Text."#;
+Instructions:
+    Focus: Extract only the key statements. Ignore small talk and advertisements.
+    Structure: Use exactly this Markdown outline:
+        ## Metadata
+        Date of episode/publication, episode number. If nothing mentioned: "No metadata mentioned."
+        ## Summary in One Sentence
+        What is the core topic? One single concise sentence.
+        ## Key Arguments & Insights
+        Bullet points with the core statements.
+        ## Data & Facts
+        All significant numbers, statistics, or dates.
+        ## Most Important Quotes
+        Select 5 to 10 quotes containing exceptional data, concrete facts, or particularly concise statements. Reproduce each quote verbatim. One quote per line in the format: **Label:** "verbatim quote" — use the label exactly as it appears in the transcript (do not invent names; use neutral labels where applicable).
+    Style: Factual, concise, informative. No filler words.
+    Limit: Summary maximum approx. 800 words; quotes verbatim from the text."#;
 
 fn split_chunks(text: &str, max_chars: usize) -> Vec<String> {
     let text = text.trim();
@@ -146,9 +146,9 @@ pub async fn transcript_with_speakers_with_progress(
             SYSTEM_PROMPT_CONT
         };
         let user = if i == 0 {
-            format!("Rohtranskript:\n\n{chunk}")
+            format!("Raw transcript:\n\n{chunk}")
         } else {
-            format!("Nächster Abschnitt:\n\n{chunk}")
+            format!("Next section:\n\n{chunk}")
         };
         let part = call_llm(
             client,
@@ -174,7 +174,7 @@ pub async fn generate_summary(
     let max_in = 50_000usize;
     let text_for_summary = if transcript.len() > max_in {
         let mut s = transcript.chars().take(max_in).collect::<String>();
-        s.push_str("\n\n[... Transkript gekürzt für Zusammenfassung ...]");
+        s.push_str("\n\n[... transcript truncated for summary ...]");
         s
     } else {
         transcript.to_string()
@@ -185,7 +185,7 @@ pub async fn generate_summary(
         cfg.temperature,
         cfg.max_tokens,
         SYSTEM_PROMPT_SUMMARY,
-        &format!("Transkript:\n\n{text_for_summary}"),
+        &format!("Transcript:\n\n{text_for_summary}"),
     )
     .await
 }

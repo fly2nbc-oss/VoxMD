@@ -1,103 +1,109 @@
 # VoxMD
 
-**Lokale Audio-Transkription mit Whisper und Markdown-Ausgabe inkl. LLM-Nachbearbeitung.**
+**Local audio transcription with Whisper and Markdown output including LLM post-processing.**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/fly2nbc-oss/VoxMD?label=release)](https://github.com/fly2nbc-oss/VoxMD/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/fly2nbc-oss/VoxMD/ci.yml?label=CI&logo=github)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/ci.yml)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#unterstützte-plattformen--formate)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#supported-platforms--formats)
 
-VoxMD ist eine **Tauri v2**-Desktop-Anwendung (Rust-Backend, React/TypeScript-Frontend). Sie transkribiert Audiodateien lokal mit **whisper.cpp** (via `whisper-rs`), reichert das Ergebnis per **OpenAI-kompatibler API** (z. B. Deepseek) mit Sprecher-Zuordnung und Zusammenfassung an und schreibt eine **Markdown-Datei** pro Quelle.
+VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript frontend). It transcribes audio files locally using **whisper.cpp** (via `whisper-rs`), enriches the result with speaker identification and a summary via an **OpenAI-compatible API** (e.g. Deepseek), and writes a **Markdown file** per source.
 
 ---
 
-## Inhalt
+## Table of Contents
 
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Quick Start](#quick-start)
-- [Nutzung](#nutzung)
-- [Unterstützte Plattformen & Formate](#unterstützte-plattformen--formate)
-- [Entwicklung & Build](#entwicklung--build)
+- [Usage](#usage)
+- [Supported Platforms & Formats](#supported-platforms--formats)
+- [Development & Build](#development--build)
 - [Releases](#releases)
 - [Roadmap & Known Issues](#roadmap--known-issues)
 - [Contributing](#contributing)
-- [Lizenz](#lizenz)
+- [License](#license)
 
 ---
 
 ## Screenshots
 
-<!-- Füge Demo-Bilder in ./screenshots/ hinzu (Hell- und Dunkelmodus, Windows + Linux + macOS) -->
+<!-- Add demo images to ./screenshots/ (light and dark mode, Windows + Linux + macOS) -->
 
-| Hauptfenster (Hell) | Hauptfenster (Dunkel) |
+| Main window (light) | Main window (dark) |
 |---|---|
 | ![Light](./screenshots/main-light.png) | ![Dark](./screenshots/main-dark.png) |
 
 ## Features
 
-- **Parallele Pipeline**: Während die LLM-Phase für Datei *n* läuft, transkribiert Whisper bereits Datei *n+1*.
-- **Fortschritt**: Pro-Datei-Status und Gesamtfortschritt über Tauri-Events.
-- **Design**: UI-Design-System (Hell/Dunkel, Slate-Blau, Lucide Outline-Icons).
-- **Konfiguration**: API-URL, Key, Modell, Chunk-Größe, Whisper-Modellpfad, optional GPU – persistent im Store.
-- **Formate**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (Dekodierung über Symphonia).
-- **Optional Vulkan**: Cargo-Feature `gpu-vulkan` für GPU-Beschleunigung (System muss Vulkan bereitstellen).
+- **Parallel pipeline**: While the LLM phase processes file *n*, Whisper is already transcribing file *n+1*.
+- **Progress tracking**: Per-file status and overall progress via Tauri events.
+- **Design**: UI design system (light/dark, slate-blue, Lucide outline icons).
+- **Configuration**: API URL, key, model, chunk size, Whisper model path, optional GPU — persisted in store.
+- **Formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (decoded via Symphonia).
+- **Optional Vulkan**: Cargo feature `gpu-vulkan` for GPU acceleration (system must provide Vulkan).
 
 ## Quick Start
 
-1. [Release herunterladen](https://github.com/fly2nbc-oss/VoxMD/releases/latest) (`.msi` / `.dmg` / `.AppImage` / `.deb`) oder lokal bauen (siehe unten).
-2. App starten – das Whisper-Modell (`turbo`, ~800 MB) wird beim ersten Start **automatisch** aus HuggingFace heruntergeladen.
-3. **API-Key** und **Base-URL** (z. B. `https://api.deepseek.com`) in den Einstellungen eintragen und **Save** drücken.
-4. **Folder** oder **Files** wählen und **Start** drücken.
+1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest) (`.msi` / `.dmg` / `.AppImage` / `.deb`) or build locally (see below).
+2. Launch the app — the Whisper model (`turbo`, ~800 MB) is **automatically downloaded** from HuggingFace on first start.
+3. Enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) in settings and press **Save**.
+4. Select a **Folder** or **Files** and press **Start**.
 
-Ausgabe: `.md` neben der Audiodatei (bzw. im gleichen Ordner).
+Output: a `.md` file next to each audio file (in the same folder).
 
-## Nutzung
+## Usage
 
-### Einstellungen (Zahnrad-Icon)
+### Settings (gear icon)
 
-| Feld | Beschreibung | Standard |
+| Field | Description | Default |
 |---|---|---|
-| API Base URL | OpenAI-kompatibler Endpunkt | `https://api.deepseek.com` |
-| API Key | Dein API-Schlüssel | *(leer)* |
-| Model | LLM-Modellname | `deepseek-v4-pro` |
-| Temperature | Kreativität des LLM (0–2) | `0.7` |
-| Max Tokens | Maximale Antwortlänge | `65536` |
-| Transcript chunk chars | Zeichen pro LLM-Chunk | `32768` |
-| Whisper model | Modellname (`turbo`, `large-v3`, …) oder lokaler Pfad | `turbo` |
-| Delete source after success | Quelldatei nach Erfolg löschen | ✅ |
-| Whisper verbose output | Debug-Ausgabe von whisper.cpp | ☐ |
+| API Base URL | OpenAI-compatible endpoint | `https://api.deepseek.com` |
+| API Key | Your API key | *(empty)* |
+| Model | LLM model name | `deepseek-v4-pro` |
+| Temperature | LLM creativity (0–2) | `0.7` |
+| Max Tokens | Maximum response length | `65536` |
+| Transcript chunk chars | Characters per LLM chunk | `32768` |
+| Whisper model | Model name (`turbo`, `large-v3`, …) or local path | `turbo` |
+| Delete source after success | Delete source file after successful processing | ✅ |
+| Whisper verbose output | Debug output from whisper.cpp | ☐ |
 
-### Modell-Auswahl
+### Model Selection
 
-Im Einstellungs-Dialog kann ein Whisper-Modell aus dem Dropdown ausgewählt werden. Modelle ohne ✓ werden beim nächsten Start automatisch heruntergeladen. Mit **Clear cache** werden alle gecachten Modelle gelöscht (`~/.cache/voxmd/whisper/`).
+In the settings dialog you can select a Whisper model from the dropdown. Models without ✓ are automatically downloaded on next start. Use **Clear cache** to delete all cached models (`~/.cache/voxmd/whisper/`).
 
-### Ausgabe-Format
+### Output Format
 
 ```
-# Titel
+# Title
 
-[KI-Zusammenfassung]
+[AI summary]
 
-## Originaltranskript
+## Original Transcript
 
-**Sprecher A**: …  
-**Sprecher B**: …
+**Speaker A**: …
+**Speaker B**: …
 ```
 
-## Unterstützte Plattformen & Formate
+## Supported Platforms & Formats
 
-| Plattform | Status        |
-|-----------|---------------|
-| Linux     | unterstützt   |
-| Windows   | unterstützt   |
-| macOS     | unterstützt   |
+| Platform | Status      |
+|----------|-------------|
+| Linux    | supported   |
+| Windows  | supported   |
+| macOS    | supported   |
 
-Audio: siehe Liste in den Quellen (`meta.rs` / UI-Filter).
+Audio formats: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS.
 
-## Entwicklung & Build
+## Development & Build
 
-Voraussetzungen: **Rust stable**, **Node LTS**, System-Pakete für [Tauri v2](https://v2.tauri.app/start/prerequisites/).
+Prerequisites: **Rust stable**, **Node LTS**, system packages for [Tauri v2](https://v2.tauri.app/start/prerequisites/).
+
+**Linux additionally requires:**
+```bash
+sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+  librsvg2-dev patchelf clang libclang-dev llvm-dev
+```
 
 ```bash
 git clone https://github.com/fly2nbc-oss/VoxMD.git
@@ -106,13 +112,13 @@ npm install
 npm run tauri dev
 ```
 
-**Produktions-Build (CPU, Standard):**
+**Production build (CPU, standard):**
 
 ```bash
 npm run tauri build
 ```
 
-**Mit Vulkan/GPU** (Vulkan-Development-Packages/SDK auf dem Build-Rechner):
+**With Vulkan/GPU** (Vulkan development packages/SDK required on the build machine):
 
 ```bash
 npm run tauri:vulkan
@@ -120,25 +126,25 @@ npm run tauri:vulkan
 
 ## Releases
 
-Jedes Release (`v*`-Tag) baut automatisch Pakete für alle Plattformen und veröffentlicht sie unter [Releases](https://github.com/fly2nbc-oss/VoxMD/releases):
+Every release (`v*` tag) automatically builds packages for all platforms and publishes them under [Releases](https://github.com/fly2nbc-oss/VoxMD/releases):
 
-| Plattform | Asset |
-|-----------|-------|
-| Windows   | `.msi` Installer |
-| macOS     | `.dmg` |
-| Linux     | `.AppImage`, `.deb`, `.rpm` |
+| Platform | Asset |
+|----------|-------|
+| Windows  | `.msi` installer |
+| macOS    | `.dmg` |
+| Linux    | `.AppImage`, `.deb`, `.rpm` |
 
-Jede Release enthält zusätzlich `SHA256SUMS.txt` zur Verifikation der Integrität.
+Each release also includes `SHA256SUMS.txt` for integrity verification.
 
 ## Roadmap & Known Issues
 
-- Fein-granularer Whisper-Fortschritt (C++-Callback) ist derzeit nicht angebunden; Stufen **Whisper** / **LLM** und LLM-Chunk-Zähler sind aktiv.
-- Abbruch laufender Jobs: aktuell ohne harten Cancel (UI zeigt Status bis zum Ende der Pipeline).
+- Fine-grained Whisper progress (C++ callback) is not yet wired up; **Whisper** / **LLM** stage indicators and LLM chunk counters are active.
+- Job cancellation: currently no hard cancel (UI shows status until the pipeline finishes).
 
 ## Contributing
 
-Siehe [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-## Lizenz
+## License
 
-Apache-2.0 – siehe [LICENSE](./LICENSE).
+Apache-2.0 — see [LICENSE](./LICENSE).

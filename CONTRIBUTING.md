@@ -1,12 +1,12 @@
 # Contributing
 
-Danke für dein Interesse an VoxMD!
+Thank you for your interest in VoxMD!
 
-## Voraussetzungen
+## Prerequisites
 
-1. [Rust (stable)](https://rustup.rs/) und [Node.js LTS](https://nodejs.org/)
-2. Systemabhängigkeiten für [Tauri v2](https://v2.tauri.app/start/prerequisites/)
-3. **Linux zusätzlich**: `clang`, `libclang-dev`, `llvm-dev` (für `whisper-rs` Bindgen)
+1. [Rust (stable)](https://rustup.rs/) and [Node.js LTS](https://nodejs.org/)
+2. System dependencies for [Tauri v2](https://v2.tauri.app/start/prerequisites/)
+3. **Linux additionally requires**: `clang`, `libclang-dev`, `llvm-dev` (for `whisper-rs` Bindgen)
 
 ```bash
 # Debian/Ubuntu
@@ -14,7 +14,7 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
   librsvg2-dev patchelf clang libclang-dev llvm-dev
 ```
 
-## Entwicklung starten
+## Getting Started
 
 ```bash
 git clone https://github.com/fly2nbc-oss/VoxMD.git
@@ -23,23 +23,23 @@ npm install
 npm run tauri dev
 ```
 
-## Build prüfen
+## Checking Your Build
 
 ```bash
-npm run build          # Frontend (TypeScript + Vite)
-cd src-tauri && cargo check   # Rust
+npm run build               # Frontend (TypeScript + Vite)
+cd src-tauri && cargo check # Rust
 ```
 
 ## Pull Requests
 
-- Kleine, fokussierte Änderungen bevorzugt
-- Beschreibe Motivation und — falls UI-Änderung — Screenshots
-- `npm run build` und `cargo check` sollten ohne Fehler durchlaufen
+- Keep changes small and focused
+- Describe the motivation and — for UI changes — include screenshots
+- `npm run build` and `cargo check` should pass without errors
 
-## Whisper-Modell lokal
+## Whisper Model (local)
 
-Lege eine GGUF-/GGML-Datei (z. B. von Hugging Face) ab und trage den Pfad in den **Einstellungen** ein. Alternativ lädt die App `turbo` beim ersten Start automatisch herunter.
+Place a GGUF/GGML file (e.g. from Hugging Face) locally and enter the path in **Settings**. Alternatively, the app automatically downloads `turbo` on first start.
 
-## Community-Verhaltenskodex
+## Code of Conduct
 
-Siehe [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+See [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
