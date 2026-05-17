@@ -14,10 +14,14 @@ jobs:
         include:
           - platform: ubuntu-22.04
             name: Linux
+            cargo_target_dir: src-tauri/target
           - platform: windows-latest
             name: Windows
+            cargo_target_dir: C:/cargo-target
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.platform }}
+    env:
+      CARGO_TARGET_DIR: ${{ matrix.cargo_target_dir }}
 
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +53,8 @@ jobs:
             libclang-dev \
             llvm-dev \
             libvulkan-dev \
-            vulkan-tools
+            vulkan-tools \
+            glslc
 
       - name: Set VULKAN_SDK (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -63,6 +68,7 @@ jobs:
           if (Test-Path $llvm) {
             echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
           }
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.platform == 'windows-latest'
@@ -90,4 +96,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: voxmd-windows-amd64-portable-exe
-          path: src-tauri/target/release/voxmd.exe
+          path: ${{ matrix.cargo_target_dir }}/release/voxmd.exe
