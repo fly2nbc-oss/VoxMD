@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/fly2nbc-oss/VoxMD?label=release)](https://github.com/fly2nbc-oss/VoxMD/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/fly2nbc-oss/VoxMD/tauri-release.yml?label=build)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/tauri-release.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/fly2nbc-oss/VoxMD/ci.yml?label=CI&logo=github)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/ci.yml)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#unterstützte-plattformen--formate)
 
 VoxMD ist eine **Tauri v2**-Desktop-Anwendung (Rust-Backend, React/TypeScript-Frontend). Sie transkribiert Audiodateien lokal mit **whisper.cpp** (via `whisper-rs`), reichert das Ergebnis per **OpenAI-kompatibler API** (z. B. Deepseek) mit Sprecher-Zuordnung und Zusammenfassung an und schreibt eine **Markdown-Datei** pro Quelle.
@@ -28,7 +28,11 @@ VoxMD ist eine **Tauri v2**-Desktop-Anwendung (Rust-Backend, React/TypeScript-Fr
 
 ## Screenshots
 
-_Placeholder: Lege Demo-Bilder unter `./screenshots/` ab (Hell- und Dunkelmodus) und binde sie hier ein._
+<!-- Füge Demo-Bilder in ./screenshots/ hinzu (Hell- und Dunkelmodus, Windows + Linux + macOS) -->
+
+| Hauptfenster (Hell) | Hauptfenster (Dunkel) |
+|---|---|
+| ![Light](./screenshots/main-light.png) | ![Dark](./screenshots/main-dark.png) |
 
 ## Features
 
@@ -41,7 +45,7 @@ _Placeholder: Lege Demo-Bilder unter `./screenshots/` ab (Hell- und Dunkelmodus)
 
 ## Quick Start
 
-1. [Release-Download](https://github.com/fly2nbc-oss/VoxMD/releases) *(nach erstem Release)* oder lokal bauen (siehe unten).
+1. [Release herunterladen](https://github.com/fly2nbc-oss/VoxMD/releases/latest) (`.msi` / `.dmg` / `.AppImage` / `.deb`) oder lokal bauen (siehe unten).
 2. App starten – das Whisper-Modell (`turbo`, ~800 MB) wird beim ersten Start **automatisch** aus HuggingFace heruntergeladen.
 3. **API-Key** und **Base-URL** (z. B. `https://api.deepseek.com`) in den Einstellungen eintragen und **Save** drücken.
 4. **Folder** oder **Files** wählen und **Start** drücken.
@@ -116,7 +120,15 @@ npm run tauri:vulkan
 
 ## Releases
 
-Für gebündelte Artefakte (`.msi`, `.dmg`, `.AppImage`, `.deb`, …) siehe GitHub **Actions** und **Releases**. Bei Tags `v*` baut der Workflow `.github/workflows/tauri-release.yml` mit `tauri-action` (setze Upload-Token/Secrets nach Bedarf).
+Jedes Release (`v*`-Tag) baut automatisch Pakete für alle Plattformen und veröffentlicht sie unter [Releases](https://github.com/fly2nbc-oss/VoxMD/releases):
+
+| Plattform | Asset |
+|-----------|-------|
+| Windows   | `.msi` Installer |
+| macOS     | `.dmg` |
+| Linux     | `.AppImage`, `.deb`, `.rpm` |
+
+Jede Release enthält zusätzlich `SHA256SUMS.txt` zur Verifikation der Integrität.
 
 ## Roadmap & Known Issues
 
