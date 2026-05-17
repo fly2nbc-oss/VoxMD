@@ -51,7 +51,7 @@ function badgeForStage(stage: string): { className: string; label: string } {
     case "error":   return { className: "badge-error",   label: "Error"   };
     case "skipped": return { className: "badge-warn",    label: "Skipped" };
     case "whisper": return { className: "badge-warn",    label: "Whisper" };
-    case "llm":     return { className: "badge-neutral", label: "LLM"     };
+    case "llm":     return { className: "badge-llm",       label: "LLM"     };
     case "queued":  return { className: "badge-neutral", label: "Wait"    };
     default:        return { className: "badge-neutral", label: stage     };
   }

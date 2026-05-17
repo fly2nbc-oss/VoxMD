@@ -332,6 +332,11 @@ select.input {
   background: var(--surface-muted);
 }
 
+.badge-llm {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
 .badge-ok {
   color: var(--status-ok);
   background: var(--status-ok-bg);
