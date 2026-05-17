@@ -316,7 +316,10 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
     }
 
     let done_counter = Arc::new(AtomicUsize::new(0));
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<TranscribedJob>(8);
+
+    // Pipeline: Whisper (file N+1) and LLM (file N) run in parallel,
+    // but never more than one of each. Channel capacity=1 enforces this.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<TranscribedJob>(1);
 
     let app_w = app.clone();
     let cfg_w = cfg.clone();
