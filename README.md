@@ -22,7 +22,7 @@ _Placeholder: Lege Demo-Bilder unter `./screenshots/` ab (Hell- und Dunkelmodus,
 
 ## Quick Start
 
-1. [Release-Download](https://github.com/OWNER/VoxMD/releases) *(nach erstem Release)* oder lokal bauen (siehe unten).
+1. [Release-Download](https://github.com/fly2nbc-oss/VoxMD/releases) *(nach erstem Release)* oder lokal bauen (siehe unten).
 2. Whisper **GGUF/GGML-Modell** beschaffen und in den **Einstellungen** den absoluten Pfad setzen.
 3. **API-Key** und **Base-URL** (z. B. Deepseek) eintragen und **Speichern**.
 4. **Ordner** oder **Dateien** wählen und **Start** drücken.
@@ -44,7 +44,7 @@ Audio: siehe Liste in den Quellen (`meta.rs` / UI-Filter).
 Voraussetzungen: **Rust stable**, **Node LTS**, System-Pakete für [Tauri v2](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
-git clone https://github.com/OWNER/VoxMD.git
+git clone https://github.com/fly2nbc-oss/VoxMD.git
 cd VoxMD
 npm install
 npm run tauri dev
