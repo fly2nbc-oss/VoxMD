@@ -80,4 +80,4 @@ Orientierung an `[ui_design_system_v1.2.md](/home/rh/SynologyDrive/SourceCode/ui
 
 ## 4. GitHub Actions
 - `ci.yml`: Builds auf **Linux** und **Windows** bei Push/PR zu `main`.
-- `tauri-release.yml`: Releases bei Tags `v*` für **Linux** und **Windows** (Checksums `SHA256SUMS-linux.txt` / `SHA256SUMS-windows.txt`). **macOS** nicht in CI — lokaler Build auf Mac.
+- `tauri-release.yml`: Releases bei Tags `v*` für **Linux** und **Windows** (Checksums `SHA256SUMS-linux.txt` / `SHA256SUMS-windows.txt`).

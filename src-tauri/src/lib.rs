@@ -52,6 +52,11 @@ fn clear_whisper_cache() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn cancel_transcription() {
+    pipeline::request_cancel();
+}
+
+#[tauri::command]
 async fn start_transcription(
     app: tauri::AppHandle,
     paths: Vec<String>,
@@ -73,6 +78,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             start_transcription,
+            cancel_transcription,
             processing_state,
             collect_audio_in_directory,
             list_whisper_models,

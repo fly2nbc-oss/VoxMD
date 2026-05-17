@@ -38,9 +38,20 @@ pub struct OverallProgress {
 }
 
 static PROCESSING: AtomicBool = AtomicBool::new(false);
+static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn is_processing() -> bool {
     PROCESSING.load(Ordering::SeqCst)
+}
+
+pub fn request_cancel() {
+    if PROCESSING.load(Ordering::SeqCst) {
+        CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    }
+}
+
+fn cancel_requested() -> bool {
+    CANCEL_REQUESTED.load(Ordering::SeqCst)
 }
 
 fn emit_job(app: &AppHandle, p: JobProgressPayload) {
@@ -92,6 +103,21 @@ async fn llm_stage(
     total: usize,
 ) {
     let path_str = job.path.display().to_string();
+    if cancel_requested() {
+        emit_job(
+            &app,
+            JobProgressPayload {
+                path: path_str.clone(),
+                display_name: job.display_name.clone(),
+                stage: "skipped".to_string(),
+                whisper_pct: None,
+                llm_chunk: None,
+                overall: None,
+                message: Some("Cancelled.".to_string()),
+            },
+        );
+        return;
+    }
     let client = make_client(&cfg);
 
     emit_job(
@@ -236,7 +262,8 @@ fn overall_snapshot(done: &Arc<AtomicUsize>, total: usize) -> OverallProgress {
     }
 }
 
-/// Parallel pipeline: Whisper processes file _n+1_ while LLM handles file _n_.
+/// Pipeline: Whisper (file N+1) and LLM (file N) run in parallel,
+/// but never more than one of each. Channel capacity=1 enforces this.
 pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> Result<(), String> {
     cfg.validate_for_run()?;
 
@@ -246,6 +273,7 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
     {
         return Err("Processing is already running.".to_string());
     }
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
 
     // Resolve Whisper model (download from HuggingFace if name given and not cached).
     let model_path = {
@@ -272,6 +300,7 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
         {
             Ok(p) => p,
             Err(e) => {
+                CANCEL_REQUESTED.store(false, Ordering::SeqCst);
                 PROCESSING.store(false, Ordering::SeqCst);
                 return Err(e);
             }
@@ -310,6 +339,7 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
 
     let total = work.len();
     if total == 0 {
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
         PROCESSING.store(false, Ordering::SeqCst);
         let _ = app.emit("batch_complete", &serde_json::json!({ "total": 0u32 }));
         return Ok(());
@@ -317,8 +347,6 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
 
     let done_counter = Arc::new(AtomicUsize::new(0));
 
-    // Pipeline: Whisper (file N+1) and LLM (file N) run in parallel,
-    // but never more than one of each. Channel capacity=1 enforces this.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<TranscribedJob>(1);
 
     let app_w = app.clone();
@@ -334,7 +362,32 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
         )
         .map_err(|e| format!("Whisper init: {e}"))?;
 
-        for path in work {
+        let n_items = work.len();
+        for idx in 0..n_items {
+            if cancel_requested() {
+                for tail_path in work.iter().skip(idx) {
+                    let display_tail = tail_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    emit_job(
+                        &app_w,
+                        JobProgressPayload {
+                            path: tail_path.display().to_string(),
+                            display_name: display_tail,
+                            stage: "skipped".to_string(),
+                            whisper_pct: None,
+                            llm_chunk: None,
+                            overall: Some(overall_snapshot(&done_w, total)),
+                            message: Some("Cancelled.".to_string()),
+                        },
+                    );
+                }
+                break;
+            }
+
+            let path = work[idx].clone();
             let (meta_title, meta_year) = get_audio_metadata(&path);
             let display_name = path
                 .file_name()
@@ -390,6 +443,41 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
                 continue;
             }
 
+            if cancel_requested() {
+                emit_job(
+                    &app_w,
+                    JobProgressPayload {
+                        path: path.display().to_string(),
+                        display_name: display_name.clone(),
+                        stage: "skipped".to_string(),
+                        whisper_pct: None,
+                        llm_chunk: None,
+                        overall: Some(overall_snapshot(&done_w, total)),
+                        message: Some("Cancelled.".to_string()),
+                    },
+                );
+                for tail_path in work.iter().skip(idx + 1) {
+                    let display_tail = tail_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    emit_job(
+                        &app_w,
+                        JobProgressPayload {
+                            path: tail_path.display().to_string(),
+                            display_name: display_tail,
+                            stage: "skipped".to_string(),
+                            whisper_pct: None,
+                            llm_chunk: None,
+                            overall: Some(overall_snapshot(&done_w, total)),
+                            message: Some("Cancelled.".to_string()),
+                        },
+                    );
+                }
+                break;
+            }
+
             let job = TranscribedJob {
                 path,
                 display_name,
@@ -417,6 +505,7 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
 
     let wh_res = whisper_task.await.map_err(|e| e.to_string())?;
     if let Err(e) = wh_res {
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
         PROCESSING.store(false, Ordering::SeqCst);
         let _ = app.emit(
             "batch_complete",
@@ -427,10 +516,12 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
 
     llm_task.await.ok();
 
+    let cancelled = cancel_requested();
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
     PROCESSING.store(false, Ordering::SeqCst);
     let _ = app.emit(
         "batch_complete",
-        &serde_json::json!({ "total": total }),
+        &serde_json::json!({ "total": total, "cancelled": cancelled }),
     );
     Ok(())
 }

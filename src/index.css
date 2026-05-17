@@ -147,6 +147,20 @@ button:disabled {
   color: var(--accent);
 }
 
+.icon-btn-danger {
+  color: var(--status-error);
+}
+
+.icon-btn-danger:hover:not(:disabled) {
+  background: var(--status-error-bg);
+  color: var(--status-error);
+}
+
+.app-bar .icon-btn {
+  min-width: 32px;
+  min-height: 32px;
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -387,6 +401,63 @@ select.input {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+}
+
+.about-overlay {
+  justify-content: center;
+  align-items: center;
+  padding: var(--space-md);
+}
+
+.about-dialog {
+  width: min(380px, 100%);
+  max-height: min(480px, 90vh);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.about-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.about-app-icon {
+  display: block;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow);
+}
+
+.about-repo-link {
+  display: block;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  min-height: unset;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(91, 142, 196, 0.45);
+}
+
+.about-repo-link:hover:not(:disabled) {
+  color: var(--accent-strong);
+  background: transparent;
 }
 
 .icon {

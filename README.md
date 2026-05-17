@@ -28,11 +28,9 @@ VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript fron
 
 ## Screenshots
 
-<!-- Place demos under ./screenshots/ (light + dark; Windows/Linux match CI artifacts.) -->
+![VoxMD main window — Linux, light theme](./screenshots/Linux_light.png)
 
-| Main window (light) | Main window (dark) |
-|---|---|
-| ![Light](./screenshots/main-light.png) | ![Dark](./screenshots/main-dark.png) |
+Dark mode uses the same layout with theme colours from Settings / system preference.
 
 ## Features
 
@@ -46,8 +44,7 @@ VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript fron
 
 ## Quick Start
 
-1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** (`.msi`) and **Linux** (`.deb` / `.rpm`; `.AppImage` when bundled successfully).  
-   **macOS:** build locally ([Development & Build](#development--build)); CI does not publish `.dmg` binaries.
+1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** (`.msi`) and **Linux** (`.deb` / `.rpm`; `.AppImage` when bundled successfully).
 2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local GGUF path).
 3. Enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) in settings and press **Save**.
 4. Select **Folder** or **Files** and press **Start**.
@@ -95,7 +92,6 @@ Speaker lines follow the strict `[HH:MM:SS] **Label:** …` format produced by t
 |----------|------------------------|-------------|
 | Linux    | ✅ tested on Ubuntu runner | ✅ |
 | Windows  | ✅ | ✅ |
-| macOS    | ❌ not built in GitHub Actions | ✅ (`npm run tauri build` on a Mac) |
 
 Audio formats: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS.
 
@@ -129,8 +125,6 @@ npm run tauri build
 npm run tauri:vulkan
 ```
 
-macOS deployments should keep **macOS 10.15+** as minimum when linking whisper.cpp / GGML (`src-tauri/tauri.conf.json` / `.cargo/config.toml`).
-
 ## Releases
 
 Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflows/tauri-release.yml), which builds **Linux** and **Windows** packages and attaches checksum files:
@@ -139,8 +133,6 @@ Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflo
 |----------|-------------|
 | `SHA256SUMS-linux.txt` | Hashes for `.deb`, `.rpm`, `.AppImage` (if produced) |
 | `SHA256SUMS-windows.txt` | Hashes for `.msi` / installer outputs |
-
-macOS `.dmg` bundles are **not** produced by this workflow.
 
 ## Roadmap & Known Issues
 

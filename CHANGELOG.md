@@ -25,9 +25,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 - English UI copy; unified compact **app bar**; job table columns **File**, **Status**, **Details** (blue badge styling for LLM stage).
 - Default configuration aligned with external scripting conventions (Deepseek defaults, `turbo` Whisper preset, delete-after-success enabled).
-- README / docs describe CI scope (macOS builds local-only).
+- README / docs describe CI scope (Linux and Windows builds).
 
 ### Fixed
 
 - LLM transcript chunks: split raw text on Whisper timestamp lines when possible; carry trailing labelled lines into the next chunk for speaker consistency; validate `[HH:MM:SS] **Label:**` lines and monotonic timestamps per chunk; automatic single retry with repair prompt before failing the job.
-- macOS/Linux packaging hygiene: RGBA icons for Tauri bundle; CI macOS deployment-target handling retained for contributors building locally — **macOS jobs removed from CI/release workflows** to reduce flaky runners.
+- Packaging hygiene: RGBA icons for Tauri bundle; CI and releases target **Linux and Windows**.

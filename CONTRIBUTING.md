@@ -45,8 +45,6 @@ Linux AppImage bundling requires `linuxdeploy` where enabled in `tauri.conf.json
 - **Ubuntu 22.04** — full `npm run tauri build`
 - **Windows** — full `npm run tauri build`
 
-**macOS is intentionally excluded** from CI to avoid flaky whisper.cpp/Xcode coupling on runners; validate macOS locally if you touch native code paths.
-
 Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same matrix** (Linux + Windows). Published checksum files are named `SHA256SUMS-linux.txt` and `SHA256SUMS-windows.txt`.
 
 ## Pull Requests

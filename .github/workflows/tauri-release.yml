@@ -86,8 +86,6 @@ jobs:
             | Windows  | `.msi` installer |
             | Linux    | `.AppImage` or `.deb` |
 
-            macOS builds are not produced in CI; build locally on a Mac if needed.
-
             Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
 
             See [CHANGELOG.md](https://github.com/fly2nbc-oss/VoxMD/blob/main/CHANGELOG.md) for details.
@@ -101,7 +99,7 @@ jobs:
           cd src-tauri/target/release/bundle
           find . -type f \( \
             -name "*.deb" -o -name "*.rpm" -o \
-            -name "*.AppImage" -o -name "*.dmg" \
+            -name "*.AppImage" \
           \) -exec sha256sum {} \; | sort > SHA256SUMS-${{ matrix.sha_suffix }}.txt
           cat SHA256SUMS-${{ matrix.sha_suffix }}.txt
 

@@ -1,10 +1,14 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Store } from "@tauri-apps/plugin-store";
 import {
+  CircleStop,
   FileAudio2,
   FolderOpen,
+  Info,
   Loader2,
   Moon,
   Play,
@@ -15,9 +19,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultConfig } from "./defaults";
 import type { AppConfig } from "./types";
+import appIcon from "../src-tauri/icons/128x128.png";
 
 const STORE_FILE = "voxmd-settings.json";
 const CONFIG_KEY = "appConfig";
+
+const GITHUB_URL = "https://github.com/fly2nbc-oss/VoxMD";
 
 function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppConfig {
   const base = defaultConfig();
@@ -92,7 +99,14 @@ export default function App() {
   const [modelDownload, setModelDownload] = useState<{ pct: number; model: string } | null>(null);
   const [modelInfos, setModelInfos] = useState<Array<{ name: string; sizeHint: string; cached: boolean }>>([]);
   const [clearingCache, setClearingCache] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [aboutVersion, setAboutVersion] = useState<string>("");
   const settingsWasOpen = useRef(false);
+
+  useEffect(() => {
+    if (!aboutOpen) return;
+    void getVersion().then(setAboutVersion).catch(() => setAboutVersion("—"));
+  }, [aboutOpen]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -164,10 +178,12 @@ export default function App() {
           setStatusMsg(p.message);
         }
       });
-      unlistenDone = await listen<{ total: number }>("batch_complete", () => {
+      unlistenDone = await listen<{ total: number; cancelled?: boolean; error?: string }>("batch_complete", (e) => {
         setProcessing(false);
         setModelDownload(null);
-        setStatusMsg("Batch complete.");
+        if (e.payload.error) setStatusMsg(e.payload.error);
+        else if (e.payload.cancelled) setStatusMsg("Batch cancelled.");
+        else setStatusMsg("Batch complete.");
       });
 
       await listen<{ stage: string; model?: string; downloaded?: number; total?: number; pct?: number }>(
@@ -249,8 +265,14 @@ export default function App() {
     }
   };
 
-  const stopUiHint =
-    "The running backend job cannot be cancelled yet; progress is shown until the current batch finishes.";
+  const cancelProcessing = async () => {
+    try {
+      await invoke("cancel_transcription");
+      setStatusMsg("Cancelling…");
+    } catch (e) {
+      setStatusMsg(String(e));
+    }
+  };
 
   const rows = useMemo(() => paths.map((p) => jobs[p] ?? { path: p, displayName: p, stage: "queued" }), [paths, jobs]);
 
@@ -262,11 +284,11 @@ export default function App() {
         <h1 className="app-bar-title">VoxMD</h1>
         <div className="app-bar-actions">
           <button type="button" className="btn-secondary btn-sm" onClick={pickFolder} title="Folder with audio files">
-            <FolderOpen size={14} aria-hidden />
+            <FolderOpen size={18} aria-hidden />
             <span>Folder</span>
           </button>
           <button type="button" className="btn-secondary btn-sm" onClick={pickFiles} title="Select audio files">
-            <FileAudio2 size={14} aria-hidden />
+            <FileAudio2 size={18} aria-hidden />
             <span>Files</span>
           </button>
           <button
@@ -276,14 +298,25 @@ export default function App() {
             onClick={start}
             title="Start processing"
           >
-            <Play size={14} aria-hidden />
+            <Play size={18} aria-hidden />
             <span>Start</span>
           </button>
           {processing ? (
-            <span className="badge badge-neutral" title={stopUiHint}>
-              <Loader2 size={12} className="icon" style={{ animation: "spin 1s linear infinite" }} />
-              Running
-            </span>
+            <>
+              <button
+                type="button"
+                className="icon-btn icon-btn-danger"
+                title="Cancel batch (stops before the next Whisper file after the current work)"
+                aria-label="Cancel"
+                onClick={cancelProcessing}
+              >
+                <CircleStop size={22} aria-hidden />
+              </button>
+              <span className="badge badge-neutral" title="Processing">
+                <Loader2 size={16} className="icon" style={{ animation: "spin 1s linear infinite" }} />
+                Running
+              </span>
+            </>
           ) : null}
         </div>
         <div className="app-bar-end">
@@ -294,7 +327,7 @@ export default function App() {
             aria-label="Theme"
             onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
           >
-            {theme === "dark" ? <Sun className="icon" size={16} /> : <Moon className="icon" size={16} />}
+            {theme === "dark" ? <Sun className="icon" size={22} /> : <Moon className="icon" size={22} />}
           </button>
           <button
             type="button"
@@ -303,7 +336,16 @@ export default function App() {
             aria-label="Settings"
             onClick={() => setSettingsOpen(true)}
           >
-            <Settings className="icon" size={16} />
+            <Settings className="icon" size={22} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            title="About"
+            aria-label="About"
+            onClick={() => setAboutOpen(true)}
+          >
+            <Info className="icon" size={22} aria-hidden />
           </button>
         </div>
       </header>
@@ -573,6 +615,42 @@ export default function App() {
               </div>
             </div>
           </aside>
+        </div>
+      ) : null}
+
+      {aboutOpen ? (
+        <div className="drawer-overlay about-overlay" role="presentation" onMouseDown={() => setAboutOpen(false)}>
+          <div className="about-dialog" onMouseDown={(ev) => ev.stopPropagation()}>
+            <div className="drawer-header">
+              <strong>About VoxMD</strong>
+              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={() => setAboutOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="drawer-body">
+              <div className="about-brand">
+                <img src={appIcon} alt="" width={112} height={112} className="about-app-icon" />
+              </div>
+              <p style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}>
+                Transcribe audio to Markdown with local Whisper and your LLM API. Settings and keys stay on this device.
+              </p>
+              <p style={{ margin: 0, fontSize: 13 }}>
+                <span style={{ color: "var(--muted)" }}>Version</span>{" "}
+                <span className="mono">{aboutVersion || "…"}</span>
+              </p>
+              <div style={{ margin: 0 }}>
+                <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 4 }}>GitHub repository</div>
+                <button
+                  type="button"
+                  className="about-repo-link"
+                  title={GITHUB_URL}
+                  onClick={() => void openUrl(GITHUB_URL)}
+                >
+                  {GITHUB_URL}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
 
