@@ -67,6 +67,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Set macOS deployment target
+        if: matrix.platform == 'macos-latest'
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
+          echo "CMAKE_OSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
+
       - name: Build and publish Tauri release
         id: tauri
         uses: tauri-apps/tauri-action@v0
