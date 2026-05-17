@@ -16,9 +16,6 @@ jobs:
           - platform: ubuntu-22.04
             name: Linux
             sha_suffix: linux
-          - platform: macos-latest
-            name: macOS
-            sha_suffix: macos
           - platform: windows-latest
             name: Windows
             sha_suffix: windows
@@ -41,7 +38,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          shared-key: macos-dt-10.15
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -68,29 +64,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Set macOS deployment target
-        if: matrix.platform == 'macos-latest'
-        run: |
-          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
-          echo "CMAKE_OSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
-          echo "CFLAGS=-mmacosx-version-min=10.15" >> $GITHUB_ENV
-          echo "CXXFLAGS=-mmacosx-version-min=10.15" >> $GITHUB_ENV
-          echo "CMAKE_ARGS=-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
-
-      - name: Clear stale whisper-rs-sys CMake cache (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: rm -rf src-tauri/target/release/build/whisper-rs-sys-*
-
       - name: Build and publish Tauri release
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform == 'macos-latest' && '10.15' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ matrix.platform == 'macos-latest' && '10.15' || '' }}
-          CFLAGS: ${{ matrix.platform == 'macos-latest' && '-mmacosx-version-min=10.15' || '' }}
-          CXXFLAGS: ${{ matrix.platform == 'macos-latest' && '-mmacosx-version-min=10.15' || '' }}
-          CMAKE_ARGS: ${{ matrix.platform == 'macos-latest' && '-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15' || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
@@ -106,8 +84,9 @@ jobs:
             | Platform | File |
             |----------|------|
             | Windows  | `.msi` installer |
-            | macOS    | `.dmg` |
             | Linux    | `.AppImage` or `.deb` |
+
+            macOS builds are not produced in CI; build locally on a Mac if needed.
 
             Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
 
@@ -115,8 +94,8 @@ jobs:
           releaseDraft: true
           prerelease: false
 
-      - name: Generate SHA256SUMS (Linux / macOS)
-        if: matrix.platform != 'windows-latest'
+      - name: Generate SHA256SUMS (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
         shell: bash
         run: |
           cd src-tauri/target/release/bundle
