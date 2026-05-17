@@ -188,7 +188,7 @@ fn validate_labeled_chunk(output: &str) -> Result<(), String> {
             .ok_or_else(|| format!("Expected **Label:** after timestamp on: {}", truncate(line, 120)))?;
 
         let close = rest
-            .find("**:")
+            .find(":**")
             .ok_or_else(|| format!("Expected **Label:** closing on: {}", truncate(line, 120)))?;
 
         let label = &rest[..close];
@@ -453,4 +453,23 @@ pub fn segments_to_raw_text(state: &whisper_rs::WhisperState) -> Result<String, 
         lines.push(format!("{} {text}", fmt_ts(t0)));
     }
     Ok(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_labeled_chunk;
+
+    #[test]
+    fn validates_standard_labeled_line() {
+        let output = "[00:00:00] **Paul:** Es ist Freitag in der 15. Woche 2026 und hier ist nacktes Geld.";
+
+        assert!(validate_labeled_chunk(output).is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_label_colon() {
+        let output = "[00:00:00] **Paul** Es ist Freitag.";
+
+        assert!(validate_labeled_chunk(output).is_err());
+    }
 }
