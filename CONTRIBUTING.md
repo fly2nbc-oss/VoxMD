@@ -6,7 +6,7 @@ Thank you for your interest in VoxMD!
 
 1. [Rust (stable)](https://rustup.rs/) and [Node.js LTS](https://nodejs.org/)
 2. System dependencies for [Tauri v2](https://v2.tauri.app/start/prerequisites/)
-3. **Linux additionally requires**: `clang`, `libclang-dev`, `llvm-dev` (for `whisper-rs` Bindgen)
+3. **Linux additionally requires**: `clang`, `libclang-dev`, `llvm-dev` (for `whisper-rs` bindgen)
 
 ```bash
 # Debian/Ubuntu
@@ -27,18 +27,41 @@ npm run tauri dev
 
 ```bash
 npm run build               # Frontend (TypeScript + Vite)
-cd src-tauri && cargo check # Rust
+cargo check --manifest-path src-tauri/Cargo.toml   # Rust library/binary
 ```
+
+Optional full desktop bundle:
+
+```bash
+npm run tauri build
+```
+
+Linux AppImage bundling requires `linuxdeploy` where enabled in `tauri.conf.json`; `.deb`/`.rpm` may still succeed without it.
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs on pushes and PRs targeting **`main`** for:
+
+- **Ubuntu 22.04** — full `npm run tauri build`
+- **Windows** — full `npm run tauri build`
+
+**macOS is intentionally excluded** from CI to avoid flaky whisper.cpp/Xcode coupling on runners; validate macOS locally if you touch native code paths.
+
+Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same matrix** (Linux + Windows). Published checksum files are named `SHA256SUMS-linux.txt` and `SHA256SUMS-windows.txt`.
 
 ## Pull Requests
 
-- Keep changes small and focused
-- Describe the motivation and — for UI changes — include screenshots
-- `npm run build` and `cargo check` should pass without errors
+- Keep changes small and focused.
+- Describe motivation and — for UI changes — attach screenshots (light/dark if relevant).
+- `npm run build` and `cargo check --manifest-path src-tauri/Cargo.toml` must pass.
 
-## Whisper Model (local)
+## Whisper Models
 
-Place a GGUF/GGML file (e.g. from Hugging Face) locally and enter the path in **Settings**. Alternatively, the app automatically downloads `turbo` on first start.
+Either configure a **preset name** (downloaded automatically on demand) or an absolute path to a local `.gguf` file in Settings.
+
+## LLM Transcript Stage
+
+Speaker tagging splits the raw Whisper text into chunks (`transcript_chunk_chars`). Invalid chunk outputs trigger one automatic repair attempt before the job fails — if you adjust prompts in `src-tauri/src/llm.rs`, keep the `[HH:MM:SS] **Label:**` contract in mind.
 
 ## Code of Conduct
 

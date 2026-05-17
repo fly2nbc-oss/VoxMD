@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/fly2nbc-oss/VoxMD?label=release)](https://github.com/fly2nbc-oss/VoxMD/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/fly2nbc-oss/VoxMD/ci.yml?label=CI&logo=github)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/ci.yml)
-[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#supported-platforms--formats)
+[![Platforms](https://img.shields.io/badge/ci-Windows%20%7C%20Linux-blue.svg)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/ci.yml)
 
 VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript frontend). It transcribes audio files locally using **whisper.cpp** (via `whisper-rs`), enriches the result with speaker identification and a summary via an **OpenAI-compatible API** (e.g. Deepseek), and writes a **Markdown file** per source.
 
@@ -28,7 +28,7 @@ VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript fron
 
 ## Screenshots
 
-<!-- Add demo images to ./screenshots/ (light and dark mode, Windows + Linux + macOS) -->
+<!-- Place demos under ./screenshots/ (light + dark; Windows/Linux match CI artifacts.) -->
 
 | Main window (light) | Main window (dark) |
 |---|---|
@@ -36,21 +36,23 @@ VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript fron
 
 ## Features
 
-- **Parallel pipeline**: While the LLM phase processes file *n*, Whisper is already transcribing file *n+1*.
-- **Progress tracking**: Per-file status and overall progress via Tauri events.
-- **Design**: UI design system (light/dark, slate-blue, Lucide outline icons).
-- **Configuration**: API URL, key, model, chunk size, Whisper model path, optional GPU — persisted in store.
-- **Formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (decoded via Symphonia).
-- **Optional Vulkan**: Cargo feature `gpu-vulkan` for GPU acceleration (system must provide Vulkan).
+- **Pipelined processing**: At most **one** Whisper transcription and **one** LLM job run at the same time (bounded queue). While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more than one of each stage.
+- **Progress**: Per-file **Status** badge plus **Details** (timestamps / LLM chunk progress); footer shows overall queue progress and optional model-download progress.
+- **English UI** with light/dark theme (slate-blue accents, Lucide outline icons).
+- **Settings**: API URL, key, LLM model, temperature, max tokens, transcript chunk size, Whisper model name or local GGUF path, optional Whisper verbose logging, delete-after-success — persisted via `@tauri-apps/plugin-store`.
+- **Whisper models**: Known names (e.g. `turbo`) download from Hugging Face into `~/.cache/voxmd/whisper/`; dropdown shows size hints and cache status; **Clear cache** removes downloaded models.
+- **Audio formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (decoded via Symphonia).
+- **Optional Vulkan**: Cargo feature `gpu-vulkan` for GPU-backed Whisper where the system provides Vulkan.
 
 ## Quick Start
 
-1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest) (`.msi` / `.dmg` / `.AppImage` / `.deb`) or build locally (see below).
-2. Launch the app — the Whisper model (`turbo`, ~800 MB) is **automatically downloaded** from HuggingFace on first start.
+1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** (`.msi`) and **Linux** (`.deb` / `.rpm`; `.AppImage` when bundled successfully).  
+   **macOS:** build locally ([Development & Build](#development--build)); CI does not publish `.dmg` binaries.
+2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local GGUF path).
 3. Enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) in settings and press **Save**.
-4. Select a **Folder** or **Files** and press **Start**.
+4. Select **Folder** or **Files** and press **Start**.
 
-Output: a `.md` file next to each audio file (in the same folder).
+Output: a `.md` file next to each audio file (same folder).
 
 ## Usage
 
@@ -61,37 +63,39 @@ Output: a `.md` file next to each audio file (in the same folder).
 | API Base URL | OpenAI-compatible endpoint | `https://api.deepseek.com` |
 | API Key | Your API key | *(empty)* |
 | Model | LLM model name | `deepseek-v4-pro` |
-| Temperature | LLM creativity (0–2) | `0.7` |
-| Max Tokens | Maximum response length | `65536` |
-| Transcript chunk chars | Characters per LLM chunk | `32768` |
-| Whisper model | Model name (`turbo`, `large-v3`, …) or local path | `turbo` |
-| Delete source after success | Delete source file after successful processing | ✅ |
-| Whisper verbose output | Debug output from whisper.cpp | ☐ |
+| Temperature | LLM sampling temperature (0–2) | `0.7` |
+| Max Tokens | Maximum completion tokens | `65536` |
+| Transcript chunk chars | Max characters per raw-transcript slice sent to the LLM | `32768` |
+| Whisper model | Preset name (`turbo`, …) or absolute path to a `.gguf` file | `turbo` |
+| Delete source after success | Remove source audio after a successful `.md` write | ✅ |
+| Whisper verbose output | Forward whisper.cpp debug/progress to the terminal | ☐ |
 
-### Model Selection
+### Model selection
 
-In the settings dialog you can select a Whisper model from the dropdown. Models without ✓ are automatically downloaded on next start. Use **Clear cache** to delete all cached models (`~/.cache/voxmd/whisper/`).
+Pick a preset in the dropdown (sizes shown). A ✓ means the GGUF is already cached. Presets without ✓ download before transcription. **Clear cache** deletes files under `~/.cache/voxmd/whisper/`.
 
-### Output Format
+### Output Markdown layout
 
-```
-# Title
+```markdown
+# Title from metadata
 
-[AI summary]
+## Metadata
+… LLM-generated summary sections …
 
 ## Original Transcript
 
-**Speaker A**: …
-**Speaker B**: …
+[HH:MM:SS] **Speaker label:** Utterance text.
 ```
+
+Speaker lines follow the strict `[HH:MM:SS] **Label:** …` format produced by the LLM pass.
 
 ## Supported Platforms & Formats
 
-| Platform | Status      |
-|----------|-------------|
-| Linux    | supported   |
-| Windows  | supported   |
-| macOS    | supported   |
+| Platform | CI / release binaries | Local build |
+|----------|------------------------|-------------|
+| Linux    | ✅ tested on Ubuntu runner | ✅ |
+| Windows  | ✅ | ✅ |
+| macOS    | ❌ not built in GitHub Actions | ✅ (`npm run tauri build` on a Mac) |
 
 Audio formats: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS.
 
@@ -100,6 +104,7 @@ Audio formats: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS.
 Prerequisites: **Rust stable**, **Node LTS**, system packages for [Tauri v2](https://v2.tauri.app/start/prerequisites/).
 
 **Linux additionally requires:**
+
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
   librsvg2-dev patchelf clang libclang-dev llvm-dev
@@ -112,34 +117,36 @@ npm install
 npm run tauri dev
 ```
 
-**Production build (CPU, standard):**
+**Production build (CPU, default feature set):**
 
 ```bash
 npm run tauri build
 ```
 
-**With Vulkan/GPU** (Vulkan development packages/SDK required on the build machine):
+**With Vulkan / GPU Whisper** (Vulkan SDK or headers required on the build machine):
 
 ```bash
 npm run tauri:vulkan
 ```
 
+macOS deployments should keep **macOS 10.15+** as minimum when linking whisper.cpp / GGML (`src-tauri/tauri.conf.json` / `.cargo/config.toml`).
+
 ## Releases
 
-Every release (`v*` tag) automatically builds packages for all platforms and publishes them under [Releases](https://github.com/fly2nbc-oss/VoxMD/releases):
+Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflows/tauri-release.yml), which builds **Linux** and **Windows** packages and attaches checksum files:
 
-| Platform | Asset |
-|----------|-------|
-| Windows  | `.msi` installer |
-| macOS    | `.dmg` |
-| Linux    | `.AppImage`, `.deb`, `.rpm` |
+| Artifact | Description |
+|----------|-------------|
+| `SHA256SUMS-linux.txt` | Hashes for `.deb`, `.rpm`, `.AppImage` (if produced) |
+| `SHA256SUMS-windows.txt` | Hashes for `.msi` / installer outputs |
 
-Each release also includes `SHA256SUMS.txt` for integrity verification.
+macOS `.dmg` bundles are **not** produced by this workflow.
 
 ## Roadmap & Known Issues
 
-- Fine-grained Whisper progress (C++ callback) is not yet wired up; **Whisper** / **LLM** stage indicators and LLM chunk counters are active.
-- Job cancellation: currently no hard cancel (UI shows status until the pipeline finishes).
+- Whisper does not expose fine-grained percentage progress to the UI; stages **Whisper** / **LLM** and LLM chunk indexing still indicate where time is spent.
+- No hard cancellation of an in-flight job (status updates until the pipeline finishes).
+- Linux AppImage bundling may fail if `linuxdeploy` is missing on the runner or developer machine.
 
 ## Contributing
 

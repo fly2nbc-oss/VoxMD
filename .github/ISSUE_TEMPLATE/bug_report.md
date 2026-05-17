@@ -23,5 +23,6 @@ A clear, concise description of the bug.
 **Environment**
 - VoxMD version:
 - Operating system:
-- Whisper model:
-- GPU / Vulkan:
+- Whisper model (preset name or path):
+- GPU / Vulkan enabled:
+- LLM API base URL / provider (if relevant):

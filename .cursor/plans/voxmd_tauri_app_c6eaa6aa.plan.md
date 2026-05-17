@@ -1,6 +1,6 @@
 ---
 name: VoxMD Tauri App
-overview: Entwicklung der nativen Tauri-App "VoxMD" mit Rust-Backend und React-Frontend. Die App nutzt eine asynchrone Pipeline, um Whisper-Transkription (GPU) und LLM-Verarbeitung (Netzwerk) parallel auszuführen.
+overview: Native Tauri-App „VoxMD“ (Rust + React). Whisper transkribiert lokal; das LLM läuft über eine OpenAI-kompatible API. Pipeline mit Kanal-Kapazität 1 — höchstens eine Whisper- und eine LLM-Arbeit gleichzeitig.
 todos:
   - id: init-project
     content: Tauri Projekt "VoxMD" mit React/TS initialisieren
@@ -36,12 +36,11 @@ isProject: false
 - Anlage der Struktur (`README.md`, `CHANGELOG.md`, etc.) exakt nach den Vorgaben aus `[prd_github_project.md](/home/rh/SynologyDrive/SourceCode/prd_github_project.md)`.
 
 ## 2. Rust Backend (Architektur & Pipeline)
-Um die Anforderung "Parallel Bearbeitung von zwei Dateien" optimal zu lösen, bauen wir eine asynchrone Pipeline mit `tokio`:
+Asynchrone Pipeline mit `tokio` und einem bounded Channel (`capacity = 1`):
 
-- **Worker 1 (Whisper - GPU-gebunden):** Nimmt die nächste Audiodatei aus der Queue und führt `whisper-rs` (mit `vulkan`-Feature) aus.
-- **Worker 2 (LLM - Netzwerk-gebunden):** Empfängt den fertigen Rohtext von Worker 1, ruft Deepseek via `async-openai` auf und speichert die `.md`-Datei.
-- **Effekt:** Während Datei A vom LLM verarbeitet wird, transkribiert Whisper bereits Datei B.
-- **State Management:** Ein globaler App-State trackt den Fortschritt und sendet Events an das Frontend (`tauri::emit`).
+- **Whisper (blocking worker):** Transkribiert nacheinander; sobald ein Rohtext fertig ist, wird er an den LLM-Kanal geschickt — der Kanal hat Platz für höchstens **ein** wartendes Ergebnis, daher maximal **ein** Whisper und **ein** LLM gleichzeitig.
+- **LLM (`async`):** Verarbeitet den Rohtext (Sprecher-Zuordnung in Chunks mit Kontext-Tail, Validierung + ein Retry bei Formatfehlern), dann Zusammenfassung; schreibt Markdown.
+- **Fortschritt:** `tauri::emit` (`job_progress`, `batch_complete`, `model_download_progress`).
 
 ```mermaid
 graph TD
@@ -70,14 +69,15 @@ graph TD
 ```
 
 ## 3. Frontend & GUI (Design System v1.2)
-Umsetzung strikt nach `[ui_design_system_v1.2.md](/home/rh/SynologyDrive/SourceCode/ui_design_system_v1.2.md)`.
+Orientierung an `[ui_design_system_v1.2.md](/home/rh/SynologyDrive/SourceCode/ui_design_system_v1.2.md)`.
 
-- **Layout:** 
-  - Topbar (mit Dark/Light-Toggle & Config-Button)
-  - Content Area (Dateiliste mit individuellen Status-Badges und Fortschrittsbalken)
-  - Meta-Bar (Gesamtfortschritt der Queue).
+- **Layout:**
+  - Kompakte **App-Bar** (Aktionen, Theme, Settings)
+  - Dateitabelle: Spalten **File**, **Status** (Badge), **Details**
+  - Meta-Bar unten (Gesamtfortschritt / Modell-Download)
 - **Styling:** Nutzung der definierten CSS-Variablen (`--bg`, `--surface`, `--accent` `#3B5F8A`), Lucide Icons (Outline), und Status-Farben (`--status-ok`, etc.).
 - **Config-Menu:** Ein Einstellungs-Panel für Deepseek API-Key, Whisper-Modell und Chunk-Größen. Speicherung erfolgt persistent via `tauri-plugin-store`.
 
 ## 4. GitHub Actions
-- Einrichtung von `.github/workflows/tauri-release.yml` für automatisierte Releases (Windows `.exe`, Linux `.AppImage`/`.deb`, macOS `.dmg`) entsprechend der PRD-Vorgaben.
+- `ci.yml`: Builds auf **Linux** und **Windows** bei Push/PR zu `main`.
+- `tauri-release.yml`: Releases bei Tags `v*` für **Linux** und **Windows** (Checksums `SHA256SUMS-linux.txt` / `SHA256SUMS-windows.txt`). **macOS** nicht in CI — lokaler Build auf Mac.
