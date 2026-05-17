@@ -2,14 +2,33 @@
 
 **Lokale Audio-Transkription mit Whisper und Markdown-Ausgabe inkl. LLM-Nachbearbeitung.**
 
-![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/fly2nbc-oss/VoxMD?label=release)](https://github.com/fly2nbc-oss/VoxMD/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/fly2nbc-oss/VoxMD/tauri-release.yml?label=build)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/tauri-release.yml)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#unterstützte-plattformen--formate)
 
 VoxMD ist eine **Tauri v2**-Desktop-Anwendung (Rust-Backend, React/TypeScript-Frontend). Sie transkribiert Audiodateien lokal mit **whisper.cpp** (via `whisper-rs`), reichert das Ergebnis per **OpenAI-kompatibler API** (z. B. Deepseek) mit Sprecher-Zuordnung und Zusammenfassung an und schreibt eine **Markdown-Datei** pro Quelle.
 
+---
+
+## Inhalt
+
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Nutzung](#nutzung)
+- [Unterstützte Plattformen & Formate](#unterstützte-plattformen--formate)
+- [Entwicklung & Build](#entwicklung--build)
+- [Releases](#releases)
+- [Roadmap & Known Issues](#roadmap--known-issues)
+- [Contributing](#contributing)
+- [Lizenz](#lizenz)
+
+---
+
 ## Screenshots
 
-_Placeholder: Lege Demo-Bilder unter `./screenshots/` ab (Hell- und Dunkelmodus, Windows/Linux/macOS) und binde sie hier ein._
+_Placeholder: Lege Demo-Bilder unter `./screenshots/` ab (Hell- und Dunkelmodus) und binde sie hier ein._
 
 ## Features
 
@@ -23,11 +42,44 @@ _Placeholder: Lege Demo-Bilder unter `./screenshots/` ab (Hell- und Dunkelmodus,
 ## Quick Start
 
 1. [Release-Download](https://github.com/fly2nbc-oss/VoxMD/releases) *(nach erstem Release)* oder lokal bauen (siehe unten).
-2. Whisper **GGUF/GGML-Modell** beschaffen und in den **Einstellungen** den absoluten Pfad setzen.
-3. **API-Key** und **Base-URL** (z. B. Deepseek) eintragen und **Speichern**.
-4. **Ordner** oder **Dateien** wählen und **Start** drücken.
+2. App starten – das Whisper-Modell (`turbo`, ~800 MB) wird beim ersten Start **automatisch** aus HuggingFace heruntergeladen.
+3. **API-Key** und **Base-URL** (z. B. `https://api.deepseek.com`) in den Einstellungen eintragen und **Save** drücken.
+4. **Folder** oder **Files** wählen und **Start** drücken.
 
-Ausgabe: `.md` neben der Audiodatei (bzw. im gleichen Ordner) – analog zu klassischen Transkript-Pipelines.
+Ausgabe: `.md` neben der Audiodatei (bzw. im gleichen Ordner).
+
+## Nutzung
+
+### Einstellungen (Zahnrad-Icon)
+
+| Feld | Beschreibung | Standard |
+|---|---|---|
+| API Base URL | OpenAI-kompatibler Endpunkt | `https://api.deepseek.com` |
+| API Key | Dein API-Schlüssel | *(leer)* |
+| Model | LLM-Modellname | `deepseek-v4-pro` |
+| Temperature | Kreativität des LLM (0–2) | `0.7` |
+| Max Tokens | Maximale Antwortlänge | `65536` |
+| Transcript chunk chars | Zeichen pro LLM-Chunk | `32768` |
+| Whisper model | Modellname (`turbo`, `large-v3`, …) oder lokaler Pfad | `turbo` |
+| Delete source after success | Quelldatei nach Erfolg löschen | ✅ |
+| Whisper verbose output | Debug-Ausgabe von whisper.cpp | ☐ |
+
+### Modell-Auswahl
+
+Im Einstellungs-Dialog kann ein Whisper-Modell aus dem Dropdown ausgewählt werden. Modelle ohne ✓ werden beim nächsten Start automatisch heruntergeladen. Mit **Clear cache** werden alle gecachten Modelle gelöscht (`~/.cache/voxmd/whisper/`).
+
+### Ausgabe-Format
+
+```
+# Titel
+
+[KI-Zusammenfassung]
+
+## Originaltranskript
+
+**Sprecher A**: …  
+**Sprecher B**: …
+```
 
 ## Unterstützte Plattformen & Formate
 

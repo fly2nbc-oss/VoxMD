@@ -1,6 +1,6 @@
 [package]
 name = "voxmd"
-version = "0.1.0"
+version = "0.9.0"
 description = "VoxMD – lokales Audio-Transkript mit Whisper (Vulkan) und LLM"
 authors = ["VoxMD contributors"]
 edition = "2021"

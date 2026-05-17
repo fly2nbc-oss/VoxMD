@@ -38,12 +38,45 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v__VERSION__
           releaseName: 'VoxMD v__VERSION__'
-          releaseBody: 'Assets siehe unten. SHA256 optional lokal prüfen.'
+          releaseBody: 'See assets below. Verify with SHA256SUMS.txt.'
           releaseDraft: true
           prerelease: false
+
+      - name: Generate SHA256SUMS (Linux/macOS)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          cd src-tauri/target/release/bundle
+          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.dmg" \) \
+            -exec sha256sum {} \; > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate SHA256SUMS (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $out = @()
+          Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse -Include "*.msi","*.exe","*.nsis" |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+              $out += "$hash  $($_.Name)"
+            }
+          $out | Set-Content SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - name: Upload SHA256SUMS to release
+        if: steps.tauri.outputs.releaseId != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
