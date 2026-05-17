@@ -48,7 +48,7 @@ Linux AppImage bundling requires `linuxdeploy` where enabled in `tauri.conf.json
 
 `.github/workflows/ci.yml` runs on pushes and PRs targeting **`main`** for:
 
-- **Ubuntu 22.04** — full Tauri build with `gpu-vulkan`
+- **Ubuntu 24.04** — full Tauri build with `gpu-vulkan`
 - **Windows** — full Tauri build with `gpu-vulkan`
 
 Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same matrix** (Linux + Windows). Published checksum files are named `SHA256SUMS-linux.txt` and `SHA256SUMS-windows.txt`.

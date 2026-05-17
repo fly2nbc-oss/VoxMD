@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             name: Linux
             sha_suffix: linux
             cargo_target_dir: src-tauri/target
@@ -44,7 +44,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -60,7 +60,7 @@ jobs:
             glslc
 
       - name: Set VULKAN_SDK (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
 
       - name: Set LIBCLANG_PATH (Windows)
@@ -128,7 +128,7 @@ jobs:
           Get-Item "portable-dist/VoxMD_${pkg}_Windows_x86_64_portable.exe"
 
       - name: Generate SHA256SUMS (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         shell: bash
         env:
           OUT: ${{ github.workspace }}/SHA256SUMS-${{ matrix.sha_suffix }}.txt
@@ -169,7 +169,7 @@ jobs:
           Get-Content $env:OUT
 
       - name: Upload SHA256SUMS to release (Linux)
-        if: matrix.platform == 'ubuntu-22.04' && steps.tauri.outputs.releaseId != ''
+        if: matrix.platform == 'ubuntu-24.04' && steps.tauri.outputs.releaseId != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
