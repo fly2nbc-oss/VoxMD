@@ -8,7 +8,19 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            name: Linux
+          - platform: macos-latest
+            name: macOS
+          - platform: windows-latest
+            name: Windows
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.platform }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +38,8 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Install system dependencies
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -38,7 +51,16 @@ jobs:
             libclang-dev \
             llvm-dev
 
-      - name: Install frontend deps
+      - name: Set LIBCLANG_PATH (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvm) {
+            echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+          }
+
+      - name: Install frontend dependencies
         run: npm ci
 
       - name: Build Tauri app

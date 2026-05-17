@@ -1,4 +1,4 @@
-name: release
+name: Release
 
 on:
   push:
@@ -6,17 +6,25 @@ on:
       - 'v*'
 
 jobs:
-  publish:
+  build:
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-          - platform: 'ubuntu-22.04'
-          - platform: 'windows-latest'
+          - platform: ubuntu-22.04
+            name: Linux
+            sha_suffix: linux
+          - platform: macos-latest
+            name: macOS
+            sha_suffix: macos
+          - platform: windows-latest
+            name: Windows
+            sha_suffix: windows
+    name: Release (${{ matrix.name }})
     runs-on: ${{ matrix.platform }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,11 +32,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux dependencies
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
@@ -41,49 +55,77 @@ jobs:
             libclang-dev \
             llvm-dev
 
-      - name: Install frontend deps
+      - name: Set LIBCLANG_PATH (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvm) {
+            echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+          }
+
+      - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app
+      - name: Build and publish Tauri release
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: 'VoxMD v__VERSION__'
-          releaseBody: 'See assets below. Verify with SHA256SUMS.txt.'
+          releaseBody: |
+            ## VoxMD v__VERSION__
+
+            Local audio transcription with Whisper and LLM post-processing.
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | Windows  | `.msi` installer |
+            | macOS    | `.dmg` |
+            | Linux    | `.AppImage` or `.deb` |
+
+            Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
+
+            See [CHANGELOG.md](https://github.com/fly2nbc-oss/VoxMD/blob/main/CHANGELOG.md) for details.
           releaseDraft: true
           prerelease: false
 
-      - name: Generate SHA256SUMS (Linux/macOS)
+      - name: Generate SHA256SUMS (Linux / macOS)
         if: matrix.platform != 'windows-latest'
         shell: bash
         run: |
           cd src-tauri/target/release/bundle
-          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.dmg" \) \
-            -exec sha256sum {} \; > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          find . -type f \( \
+            -name "*.deb" -o -name "*.rpm" -o \
+            -name "*.AppImage" -o -name "*.dmg" \
+          \) -exec sha256sum {} \; | sort > SHA256SUMS-${{ matrix.sha_suffix }}.txt
+          cat SHA256SUMS-${{ matrix.sha_suffix }}.txt
 
       - name: Generate SHA256SUMS (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $out = @()
-          Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse -Include "*.msi","*.exe","*.nsis" |
+          Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse `
+            -Include "*.msi","*.exe","*.nsis" |
             ForEach-Object {
               $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
               $out += "$hash  $($_.Name)"
             }
-          $out | Set-Content SHA256SUMS.txt
-          Get-Content SHA256SUMS.txt
+          $out | Sort-Object | Set-Content SHA256SUMS-${{ matrix.sha_suffix }}.txt
+          Get-Content SHA256SUMS-${{ matrix.sha_suffix }}.txt
 
       - name: Upload SHA256SUMS to release
         if: steps.tauri.outputs.releaseId != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            SHA256SUMS.txt
+          files: SHA256SUMS-${{ matrix.sha_suffix }}.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
