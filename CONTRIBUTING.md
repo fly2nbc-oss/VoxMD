@@ -36,14 +36,20 @@ Optional full desktop bundle:
 npm run tauri build
 ```
 
+Vulkan-enabled desktop bundle:
+
+```bash
+npm run tauri:vulkan
+```
+
 Linux AppImage bundling requires `linuxdeploy` where enabled in `tauri.conf.json`; `.deb`/`.rpm` may still succeed without it.
 
 ## Continuous Integration
 
 `.github/workflows/ci.yml` runs on pushes and PRs targeting **`main`** for:
 
-- **Ubuntu 22.04** — full `npm run tauri build`
-- **Windows** — full `npm run tauri build`
+- **Ubuntu 22.04** — full Tauri build with `gpu-vulkan`
+- **Windows** — full Tauri build with `gpu-vulkan`
 
 Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same matrix** (Linux + Windows). Published checksum files are named `SHA256SUMS-linux.txt` and `SHA256SUMS-windows.txt`.
 

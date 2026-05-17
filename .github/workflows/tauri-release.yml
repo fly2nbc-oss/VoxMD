@@ -50,7 +50,13 @@ jobs:
             patchelf \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            libvulkan-dev \
+            vulkan-tools
+
+      - name: Set VULKAN_SDK (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
 
       - name: Set LIBCLANG_PATH (Windows)
         if: matrix.platform == 'windows-latest'
@@ -61,10 +67,22 @@ jobs:
             echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
           }
 
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          $sdk = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) {
+            throw "Vulkan SDK not found under C:\VulkanSDK"
+          }
+          echo "VULKAN_SDK=$($sdk.FullName)" >> $env:GITHUB_ENV
+          echo "$($sdk.FullName)\Bin" >> $env:GITHUB_PATH
+
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and publish Tauri release
+      - name: Build and publish Tauri release (Vulkan)
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -74,16 +92,17 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'VoxMD v__VERSION__'
+          args: --features gpu-vulkan
           releaseBody: |
             ## VoxMD v__VERSION__
 
-            Local audio transcription with Whisper and LLM post-processing.
+            Local audio transcription with Vulkan-enabled Whisper and LLM post-processing.
 
             ### Downloads
 
-            | Platform | File |
+            | Platform | Files |
             |----------|------|
-            | Windows  | `.msi` installer |
+            | Windows  | **Portable** `VoxMD_*_Windows_x86_64_portable.exe` — no installer; **MSI**, **NSIS** setup `.exe` in release assets |
             | Linux    | `.AppImage` or `.deb` |
 
             Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
@@ -92,36 +111,72 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      - name: Prepare Windows portable EXE (rename for release)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force portable-dist | Out-Null
+          $pkg = node -pe "JSON.parse(require('fs').readFileSync('package.json','utf8')).version"
+          Copy-Item "src-tauri/target/release/voxmd.exe" `
+            "portable-dist/VoxMD_${pkg}_Windows_x86_64_portable.exe"
+          Get-Item "portable-dist/VoxMD_${pkg}_Windows_x86_64_portable.exe"
+
       - name: Generate SHA256SUMS (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         shell: bash
+        env:
+          OUT: ${{ github.workspace }}/SHA256SUMS-${{ matrix.sha_suffix }}.txt
         run: |
+          set -eu
           cd src-tauri/target/release/bundle
           find . -type f \( \
             -name "*.deb" -o -name "*.rpm" -o \
             -name "*.AppImage" \
-          \) -exec sha256sum {} \; | sort > SHA256SUMS-${{ matrix.sha_suffix }}.txt
-          cat SHA256SUMS-${{ matrix.sha_suffix }}.txt
+          \) -exec sha256sum {} \; | sort > "$OUT"
+          cat "$OUT"
 
       - name: Generate SHA256SUMS (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
+        env:
+          OUT: ${{ github.workspace }}/SHA256SUMS-${{ matrix.sha_suffix }}.txt
         run: |
           $out = @()
-          Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse `
-            -Include "*.msi","*.exe","*.nsis" |
+          $bundleRoot = "src-tauri/target/release/bundle"
+          if (Test-Path $bundleRoot) {
+            Get-ChildItem -Path $bundleRoot -Recurse `
+              -Include "*.msi","*.exe","*.nsis" `
+              -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+                $out += "$hash  $($_.Name)"
+              }
+          }
+          Get-ChildItem -Path "portable-dist" -Filter "*.exe" `
+            -ErrorAction SilentlyContinue |
             ForEach-Object {
               $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
               $out += "$hash  $($_.Name)"
             }
-          $out | Sort-Object | Set-Content SHA256SUMS-${{ matrix.sha_suffix }}.txt
-          Get-Content SHA256SUMS-${{ matrix.sha_suffix }}.txt
+          $out | Sort-Object | Set-Content $env:OUT
+          Get-Content $env:OUT
 
-      - name: Upload SHA256SUMS to release
-        if: steps.tauri.outputs.releaseId != ''
+      - name: Upload SHA256SUMS to release (Linux)
+        if: matrix.platform == 'ubuntu-22.04' && steps.tauri.outputs.releaseId != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: SHA256SUMS-${{ matrix.sha_suffix }}.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload checksum + portable EXE (Windows)
+        if: matrix.platform == 'windows-latest' && steps.tauri.outputs.releaseId != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            SHA256SUMS-${{ matrix.sha_suffix }}.txt
+            portable-dist/VoxMD_*_Windows_x86_64_portable.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

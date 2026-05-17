@@ -47,7 +47,13 @@ jobs:
             patchelf \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            libvulkan-dev \
+            vulkan-tools
+
+      - name: Set VULKAN_SDK (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
 
       - name: Set LIBCLANG_PATH (Windows)
         if: matrix.platform == 'windows-latest'
@@ -58,11 +64,30 @@ jobs:
             echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
           }
 
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          $sdk = Get-ChildItem "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) {
+            throw "Vulkan SDK not found under C:\VulkanSDK"
+          }
+          echo "VULKAN_SDK=$($sdk.FullName)" >> $env:GITHUB_ENV
+          echo "$($sdk.FullName)\Bin" >> $env:GITHUB_PATH
+
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app
-        run: npm run tauri build
+      - name: Build Tauri app (Vulkan)
+        run: npm run tauri -- build --features gpu-vulkan
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Upload Windows portable EXE (no installer)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxmd-windows-amd64-portable-exe
+          path: src-tauri/target/release/voxmd.exe

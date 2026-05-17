@@ -10,6 +10,13 @@ use std::path::PathBuf;
 use config::AppConfig;
 use meta::is_audio_file;
 use model_download::ModelInfo;
+use serde::Serialize;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VulkanStatus {
+    built_with_vulkan: bool,
+}
 
 #[tauri::command]
 fn collect_audio_in_directory(dir: String) -> Result<Vec<String>, String> {
@@ -31,6 +38,13 @@ fn collect_audio_in_directory(dir: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 fn processing_state() -> bool {
     pipeline::is_processing()
+}
+
+#[tauri::command]
+fn vulkan_status() -> VulkanStatus {
+    VulkanStatus {
+        built_with_vulkan: cfg!(feature = "gpu-vulkan"),
+    }
 }
 
 /// Returns available Whisper model names with cache status.
@@ -80,6 +94,7 @@ pub fn run() {
             start_transcription,
             cancel_transcription,
             processing_state,
+            vulkan_status,
             collect_audio_in_directory,
             list_whisper_models,
             whisper_cache_dir,

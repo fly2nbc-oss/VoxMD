@@ -101,6 +101,7 @@ export default function App() {
   const [clearingCache, setClearingCache] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [aboutVersion, setAboutVersion] = useState<string>("");
+  const [vulkanAvailable, setVulkanAvailable] = useState<boolean | null>(null);
   const settingsWasOpen = useRef(false);
 
   useEffect(() => {
@@ -111,6 +112,12 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    void invoke<{ builtWithVulkan: boolean }>("vulkan_status")
+      .then((status) => setVulkanAvailable(status.builtWithVulkan))
+      .catch(() => setVulkanAvailable(null));
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -258,7 +265,6 @@ export default function App() {
     try {
       await invoke("start_transcription", { paths, config });
       setProcessing(true);
-      setStatusMsg("Processing started…");
       setOverall({ completed: 0, total: paths.length });
     } catch (e) {
       setStatusMsg(String(e));
@@ -302,21 +308,15 @@ export default function App() {
             <span>Start</span>
           </button>
           {processing ? (
-            <>
-              <button
-                type="button"
-                className="icon-btn icon-btn-danger"
-                title="Cancel batch (stops before the next Whisper file after the current work)"
-                aria-label="Cancel"
-                onClick={cancelProcessing}
-              >
-                <CircleStop size={22} aria-hidden />
-              </button>
-              <span className="badge badge-neutral" title="Processing">
-                <Loader2 size={16} className="icon" style={{ animation: "spin 1s linear infinite" }} />
-                Running
-              </span>
-            </>
+            <button
+              type="button"
+              className="icon-btn icon-btn-danger"
+              title="Cancel batch (stops before the next Whisper file after the current work)"
+              aria-label="Cancel"
+              onClick={cancelProcessing}
+            >
+              <CircleStop size={22} aria-hidden />
+            </button>
           ) : null}
         </div>
         <div className="app-bar-end">
@@ -399,8 +399,33 @@ export default function App() {
               style={{ width: `${Math.min(100, modelDownload ? modelDownload.pct : overallPct)}%` }}
             />
           </div>
-          <span className="mono" style={{ maxWidth: "45%", textAlign: "right" }}>
-            {modelDownload ? `${modelDownload.pct}%` : statusMsg}
+          <span
+            style={{
+              maxWidth: "45%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              gap: 6,
+              minWidth: 0,
+            }}
+          >
+            {modelDownload ? (
+              <span className="mono">{`${modelDownload.pct}%`}</span>
+            ) : processing ? (
+              <>
+                <Loader2
+                  size={14}
+                  className="icon"
+                  aria-hidden
+                  style={{ animation: "spin 1s linear infinite", flexShrink: 0 }}
+                />
+                <span>{statusMsg === "Cancelling…" ? "Cancelling…" : "Running"}</span>
+              </>
+            ) : (
+              <span className="mono" style={{ textAlign: "right" }}>
+                {statusMsg}
+              </span>
+            )}
           </span>
         </footer>
       </main>
@@ -584,9 +609,26 @@ export default function App() {
                 <input
                   type="checkbox"
                   checked={config.useGpu}
+                  disabled={vulkanAvailable === false}
                   onChange={(e) => setConfig({ ...config, useGpu: e.target.checked })}
                 />
-                <span>Use GPU (only if VoxMD was built with the gpu-vulkan feature)</span>
+                <span>Use GPU</span>
+                <span
+                  className={`badge ${
+                    vulkanAvailable === true
+                      ? "badge-ok"
+                      : vulkanAvailable === false
+                        ? "badge-warn"
+                        : "badge-neutral"
+                  }`}
+                  title="Status of this VoxMD binary"
+                >
+                  {vulkanAvailable === true
+                    ? "Vulkan available"
+                    : vulkanAvailable === false
+                      ? "Vulkan not available"
+                      : "Checking Vulkan…"}
+                </span>
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                 <input

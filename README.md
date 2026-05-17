@@ -44,7 +44,7 @@ Dark mode uses the same layout with theme colours from Settings / system prefere
 
 ## Quick Start
 
-1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** (`.msi`) and **Linux** (`.deb` / `.rpm`; `.AppImage` when bundled successfully).
+1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** installers (`.msi`, NSIS setup `.exe`) and optional **portable** `VoxMD_*_Windows_x86_64_portable.exe` — no installer; [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC. **Linux**: `.deb` / `.rpm`; `.AppImage` when bundled successfully.
 2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local GGUF path).
 3. Enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) in settings and press **Save**.
 4. Select **Folder** or **Files** and press **Start**.
@@ -119,7 +119,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-**With Vulkan / GPU Whisper** (Vulkan SDK or headers required on the build machine):
+**With Vulkan / GPU Whisper** (Vulkan SDK or headers required on the build machine). The normal `tauri build` is CPU-only; use this command when you want GPU-backed Whisper:
 
 ```bash
 npm run tauri:vulkan
@@ -146,4 +146,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE).
+Licensed under the Apache License, Version 2.0. See [LICENSE](./LICENSE).
