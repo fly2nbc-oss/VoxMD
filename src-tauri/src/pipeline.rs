@@ -237,14 +237,14 @@ fn overall_snapshot(done: &Arc<AtomicUsize>, total: usize) -> OverallProgress {
 
 /// Parallele Pipeline: während LLM Datei _n_ bearbeitet, läuft Whisper auf _n+1_.
 pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> Result<(), String> {
+    cfg.validate_for_run()?;
+
     if PROCESSING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
         return Err("Verarbeitung läuft bereits.".to_string());
     }
-
-    cfg.validate_for_run()?;
 
     let mut work: Vec<PathBuf> = Vec::new();
     for p in paths {
