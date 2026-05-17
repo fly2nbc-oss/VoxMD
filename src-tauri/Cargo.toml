@@ -24,9 +24,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "fs"] }
 whisper-rs = { version = "0.16", default-features = false }
 async-openai = "0.24"
 lofty = "0.22"
 symphonia = { version = "0.5.4", features = ["all"] }
 walkdir = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures = "0.3"
+dirs = "6"

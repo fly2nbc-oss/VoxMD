@@ -10,6 +10,7 @@ use crate::audio::decode_file_to_mono_16k;
 use crate::config::AppConfig;
 use crate::llm::{self, make_client};
 use crate::meta::{get_audio_metadata, get_md_path};
+use crate::model_download;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,12 +66,12 @@ fn transcribe_one(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some(&cfg.language));
     params.set_n_threads(whisper_threads(cfg) as i32);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
+    params.set_print_progress(cfg.whisper_verbose);
+    params.set_print_realtime(cfg.whisper_verbose);
 
     state
         .full(params, &samples)
-        .map_err(|e| format!("Whisper Inferenz: {e}"))?;
+        .map_err(|e| format!("Whisper inference: {e}"))?;
 
     llm::segments_to_raw_text(&state)
 }
@@ -102,7 +103,7 @@ async fn llm_stage(
             whisper_pct: None,
             llm_chunk: None,
             overall: None,
-            message: Some("Sprecher & Zusammenfassung …".to_string()),
+            message: Some("Speakers & summary…".to_string()),
         },
     );
 
@@ -161,7 +162,7 @@ async fn llm_stage(
                     whisper_pct: None,
                     llm_chunk: None,
                     overall: Some(overall_snapshot(&done_counter, total)),
-                    message: Some(format!("Zusammenfassung: {e}")),
+                    message: Some(format!("Summary: {e}")),
                 },
             );
             return;
@@ -189,7 +190,7 @@ async fn llm_stage(
                 whisper_pct: None,
                 llm_chunk: None,
                 overall: Some(overall_snapshot(&done_counter, total)),
-                message: Some(format!("Speichern: {e}")),
+                message: Some(format!("Save failed: {e}")),
             },
         );
         return;
@@ -217,7 +218,7 @@ async fn llm_stage(
                     100.0
                 },
             }),
-            message: Some(format!("Gespeichert: {}", md_path.display())),
+            message: Some(format!("Saved: {}", md_path.display())),
         },
     );
 }
@@ -243,8 +244,43 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return Err("Verarbeitung läuft bereits.".to_string());
+        return Err("Processing is already running.".to_string());
     }
+
+    // Resolve Whisper model (download from HuggingFace if name given and not cached).
+    let model_path = {
+        let app_dl = app.clone();
+        let model_name = cfg.whisper_model.clone();
+        let _ = app_dl.emit(
+            "model_download_progress",
+            serde_json::json!({ "stage": "resolving", "model": model_name }),
+        );
+        match model_download::resolve_model(&model_name.clone(), move |dl, total| {
+            let pct = if total > 0 { dl * 100 / total } else { 0 };
+            let _ = app_dl.emit(
+                "model_download_progress",
+                serde_json::json!({
+                    "stage": "downloading",
+                    "model": model_name,
+                    "downloaded": dl,
+                    "total": total,
+                    "pct": pct,
+                }),
+            );
+        })
+        .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                PROCESSING.store(false, Ordering::SeqCst);
+                return Err(e);
+            }
+        }
+    };
+    let _ = app.emit(
+        "model_download_progress",
+        serde_json::json!({ "stage": "ready", "path": model_path.display().to_string() }),
+    );
 
     let mut work: Vec<PathBuf> = Vec::new();
     for p in paths {
@@ -264,7 +300,7 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
                     whisper_pct: None,
                     llm_chunk: None,
                     overall: None,
-                    message: Some(format!("Übersprungen (existiert): {}", md.display())),
+                    message: Some(format!("Skipped (exists): {}", md.display())),
                 },
             );
             continue;
@@ -289,8 +325,11 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.use_gpu = cfg!(feature = "gpu-vulkan") && cfg_w.use_gpu;
 
-        let ctx = WhisperContext::new_with_params(&cfg_w.whisper_model_path, ctx_params)
-            .map_err(|e| format!("Whisper init: {e}"))?;
+        let ctx = WhisperContext::new_with_params(
+            model_path.to_str().unwrap_or_default(),
+            ctx_params,
+        )
+        .map_err(|e| format!("Whisper init: {e}"))?;
 
         for path in work {
             let (meta_title, meta_year) = get_audio_metadata(&path);
@@ -342,7 +381,7 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
                         whisper_pct: None,
                         llm_chunk: None,
                         overall: None,
-                        message: Some("Kein Text erkannt.".to_string()),
+                        message: Some("No speech detected.".to_string()),
                     },
                 );
                 continue;

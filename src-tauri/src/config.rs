@@ -9,17 +9,23 @@ pub struct AppConfig {
     pub temperature: f32,
     pub max_tokens: u32,
     pub transcript_chunk_chars: usize,
-    /// Pfad zur GGUF/GGML-Modell-Datei für whisper.cpp
-    pub whisper_model_path: String,
+    /// Whisper model: name ("turbo", "large-v3", "medium", "small", "base", "tiny")
+    /// or absolute path to a local .bin / .gguf file.
+    /// Aliases: whisperModelPath (old store key) → whisperModel.
+    #[serde(alias = "whisperModelPath")]
+    pub whisper_model: String,
     #[serde(default)]
     pub whisper_threads: Option<usize>,
     #[serde(default = "default_language")]
     pub language: String,
-    /// Nutzt GPU, wenn das Binary mit Feature `gpu-vulkan` gebaut wurde
+    /// Use GPU (only effective when built with feature `gpu-vulkan`)
     #[serde(default = "default_true")]
     pub use_gpu: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub delete_source_after_success: bool,
+    /// Enable whisper.cpp progress/realtime output (WHISPER_CPP_VERBOSE)
+    #[serde(default)]
+    pub whisper_verbose: bool,
 }
 
 fn default_true() -> bool {
@@ -34,16 +40,17 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            api_base_url: "https://api.deepseek.com/v1".to_string(),
-            api_model: "deepseek-chat".to_string(),
-            temperature: 0.3,
-            max_tokens: 8192,
+            api_base_url: "https://api.deepseek.com".to_string(),
+            api_model: "deepseek-v4-pro".to_string(),
+            temperature: 0.7,
+            max_tokens: 65_536,
             transcript_chunk_chars: 32_768,
-            whisper_model_path: String::new(),
+            whisper_model: "turbo".to_string(),
             whisper_threads: None,
             language: default_language(),
             use_gpu: default_true(),
-            delete_source_after_success: false,
+            delete_source_after_success: true,
+            whisper_verbose: false,
         }
     }
 }
@@ -51,23 +58,19 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn validate_for_run(&self) -> Result<(), String> {
         if self.api_key.trim().is_empty() {
-            return Err("API-Key fehlt (Einstellungen).".to_string());
+            return Err("API key missing (Settings).".to_string());
         }
         if self.api_base_url.trim().is_empty() {
-            return Err("API Base URL fehlt.".to_string());
+            return Err("API base URL missing.".to_string());
         }
         if self.api_model.trim().is_empty() {
-            return Err("API Modell fehlt.".to_string());
+            return Err("API model missing.".to_string());
         }
-        if self.whisper_model_path.trim().is_empty() {
-            return Err("Whisper-Modellpfad fehlt (lokale GGUF/GGML-Datei).".to_string());
-        }
-        let p = std::path::Path::new(self.whisper_model_path.trim());
-        if !p.is_file() {
-            return Err(format!(
-                "Whisper-Modell nicht gefunden: {}",
-                self.whisper_model_path
-            ));
+        if self.whisper_model.trim().is_empty() {
+            return Err(
+                "Whisper model missing. Enter a name (turbo, large-v3, …) or a local file path."
+                    .to_string(),
+            );
         }
         Ok(())
     }

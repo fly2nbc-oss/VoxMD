@@ -2,18 +2,20 @@ mod audio;
 mod config;
 mod llm;
 mod meta;
+mod model_download;
 mod pipeline;
 
 use std::path::PathBuf;
 
 use config::AppConfig;
 use meta::is_audio_file;
+use model_download::ModelInfo;
 
 #[tauri::command]
 fn collect_audio_in_directory(dir: String) -> Result<Vec<String>, String> {
     let root = PathBuf::from(dir.trim());
     if !root.is_dir() {
-        return Err("Pfad ist kein Ordner.".to_string());
+        return Err("Path is not a directory.".to_string());
     }
     let mut out: Vec<String> = walkdir::WalkDir::new(&root)
         .into_iter()
@@ -29,6 +31,24 @@ fn collect_audio_in_directory(dir: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 fn processing_state() -> bool {
     pipeline::is_processing()
+}
+
+/// Returns available Whisper model names with cache status.
+#[tauri::command]
+fn list_whisper_models() -> Vec<ModelInfo> {
+    model_download::list_models()
+}
+
+/// Returns the local cache directory for Whisper models.
+#[tauri::command]
+fn whisper_cache_dir() -> String {
+    model_download::cache_dir().to_string_lossy().into_owned()
+}
+
+/// Deletes all cached Whisper model files.
+#[tauri::command]
+fn clear_whisper_cache() -> Result<(), String> {
+    model_download::clear_model_cache()
 }
 
 #[tauri::command]
@@ -54,7 +74,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_transcription,
             processing_state,
-            collect_audio_in_directory
+            collect_audio_in_directory,
+            list_whisper_models,
+            whisper_cache_dir,
+            clear_whisper_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running VoxMD");
