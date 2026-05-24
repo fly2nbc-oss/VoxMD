@@ -31,10 +31,23 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set Windows build paths (before rust-cache)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvm) {
+            echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+          }
+          echo "CARGO_TARGET_DIR=C:/cargo-target" >> $env:GITHUB_ENV
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Windows builds to C:/cargo-target; caching target often exceeds GitHub's 10GB limit.
+          cache-targets: ${{ matrix.platform != 'windows-latest' }}
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-24.04'
@@ -55,17 +68,6 @@ jobs:
       - name: Set VULKAN_SDK (Linux)
         if: matrix.platform == 'ubuntu-24.04'
         run: echo "VULKAN_SDK=/usr" >> "$GITHUB_ENV"
-
-      - name: Set LIBCLANG_PATH (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $llvm = "C:\Program Files\LLVM\bin"
-          if (Test-Path $llvm) {
-            echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-          }
-          echo "CARGO_TARGET_DIR=C:/cargo-target" >> $env:GITHUB_ENV
-          echo "CMAKE_BUILD_PARALLEL_LEVEL=1" >> $env:GITHUB_ENV
 
       - name: Install Vulkan SDK (Windows)
         if: matrix.platform == 'windows-latest'
