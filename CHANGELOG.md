@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ---
 
+## [Unreleased]
+
+## [0.9.6] - 2026-05-24
+
+### Added
+
+- Settings: **Summary language** — default uses the system locale (`system`); optional fixed ISO 639-1 code (independent of Whisper transcription language).
+
+### Changed
+
+- Windows release: portable executable is published as **`VoxMD.exe`** (no versioned portable filename).
+
 ## [0.9.0] - 2026-05-17
 
 ### Added

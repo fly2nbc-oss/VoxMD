@@ -35,7 +35,14 @@ function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppConfig {
     apiKey: saved.apiKey?.trim() ?? "",
     apiBaseUrl: saved.apiBaseUrl?.trim() ? saved.apiBaseUrl : base.apiBaseUrl,
     apiModel: saved.apiModel?.trim() ? saved.apiModel : base.apiModel,
+    summaryLanguage: saved.summaryLanguage?.trim()
+      ? saved.summaryLanguage.trim()
+      : base.summaryLanguage,
   };
+}
+
+function isSummarySystemLanguage(lang: string): boolean {
+  return lang.trim().toLowerCase() === "system";
 }
 
 interface JobProgressPayload {
@@ -102,6 +109,7 @@ export default function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [aboutVersion, setAboutVersion] = useState<string>("");
   const [vulkanAvailable, setVulkanAvailable] = useState<boolean | null>(null);
+  const [detectedSystemSummaryLang, setDetectedSystemSummaryLang] = useState("");
   const settingsWasOpen = useRef(false);
 
   useEffect(() => {
@@ -147,6 +155,13 @@ export default function App() {
     }
     settingsWasOpen.current = settingsOpen;
   }, [settingsOpen, refreshModelInfos]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    void invoke<string>("system_summary_language")
+      .then(setDetectedSystemSummaryLang)
+      .catch(() => setDetectedSystemSummaryLang(""));
+  }, [settingsOpen]);
 
   const clearCache = useCallback(async () => {
     setClearingCache(true);
@@ -596,7 +611,7 @@ export default function App() {
               </div>
               <div>
                 <label className="field-label" htmlFor="lang">
-                  Language (ISO, e.g. de)
+                  Transcription language (ISO, e.g. de)
                 </label>
                 <input
                   id="lang"
@@ -604,6 +619,46 @@ export default function App() {
                   value={config.language}
                   onChange={(e) => setConfig({ ...config, language: e.target.value })}
                 />
+              </div>
+              <div>
+                <label className="field-label">Summary language</label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                  <input
+                    type="radio"
+                    name="summaryLangMode"
+                    checked={isSummarySystemLanguage(config.summaryLanguage)}
+                    onChange={() => setConfig({ ...config, summaryLanguage: "system" })}
+                  />
+                  <span>System language</span>
+                </label>
+                {isSummarySystemLanguage(config.summaryLanguage) && detectedSystemSummaryLang ? (
+                  <p style={{ margin: "0 0 8px 22px", fontSize: 11, color: "var(--muted)" }}>
+                    Detected: {detectedSystemSummaryLang}
+                  </p>
+                ) : null}
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                  <input
+                    type="radio"
+                    name="summaryLangMode"
+                    checked={!isSummarySystemLanguage(config.summaryLanguage)}
+                    onChange={() => {
+                      const iso = isSummarySystemLanguage(config.summaryLanguage)
+                        ? config.language
+                        : config.summaryLanguage;
+                      setConfig({ ...config, summaryLanguage: iso || "de" });
+                    }}
+                  />
+                  <span>ISO code</span>
+                </label>
+                {!isSummarySystemLanguage(config.summaryLanguage) ? (
+                  <input
+                    className="input"
+                    aria-label="Summary language ISO code"
+                    placeholder="de"
+                    value={config.summaryLanguage}
+                    onChange={(e) => setConfig({ ...config, summaryLanguage: e.target.value })}
+                  />
+                ) : null}
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                 <input

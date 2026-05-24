@@ -1,6 +1,6 @@
 [package]
 name = "voxmd"
-version = "0.9.5"
+version = "0.9.6"
 description = "VoxMD – lokales Audio-Transkript mit Whisper (Vulkan) und LLM"
 authors = ["VoxMD contributors"]
 license = "Apache-2.0"
@@ -34,3 +34,4 @@ walkdir = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures = "0.3"
 dirs = "6"
+sys-locale = "0.3"

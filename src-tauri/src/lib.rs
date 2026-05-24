@@ -70,6 +70,12 @@ fn cancel_transcription() {
     pipeline::request_cancel();
 }
 
+/// Resolved ISO 639-1 code when summary language is set to `system`.
+#[tauri::command]
+fn system_summary_language() -> String {
+    config::resolve_summary_language("system")
+}
+
 #[tauri::command]
 async fn start_transcription(
     app: tauri::AppHandle,
@@ -99,6 +105,7 @@ pub fn run() {
             list_whisper_models,
             whisper_cache_dir,
             clear_whisper_cache,
+            system_summary_language,
         ])
         .run(tauri::generate_context!())
         .expect("error while running VoxMD");

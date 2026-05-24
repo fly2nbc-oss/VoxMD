@@ -5,7 +5,7 @@ use async_openai::types::{
 };
 use async_openai::Client;
 
-use crate::config::AppConfig;
+use crate::config::{resolve_summary_language, AppConfig};
 
 const SYSTEM_PROMPT: &str = r#"Your task: Convert a raw transcript (without speaker labels) into a transcript with speaker designations.
 
@@ -41,23 +41,24 @@ Hard rules:
 3. Re-use speaker labels from "Previously labeled transcript lines" when provided.
 4. One utterance per line (no paragraph merges without splitting lines)."#;
 
-const SYSTEM_PROMPT_SUMMARY: &str = r#"Create a structured summary from the following transcript and extract quotes.
+fn summary_system_prompt(lang: &str) -> String {
+    format!(
+        r#"Create a structured summary from the following transcript and extract quotes.
+
+Language: Write the ENTIRE output in {lang} (ISO 639-1). All Markdown section headings, bullet points, metadata fields, and explanatory text must be in {lang}.
 
 Instructions:
     Focus: Extract only the key statements. Ignore small talk and advertisements.
-    Structure: Use exactly this Markdown outline:
-        ## Metadata
-        Date of episode/publication, episode number. If nothing mentioned: "No metadata mentioned."
-        ## Summary in One Sentence
-        What is the core topic? One single concise sentence.
-        ## Key Arguments & Insights
-        Bullet points with the core statements.
-        ## Data & Facts
-        All significant numbers, statistics, or dates.
-        ## Most Important Quotes
-        Select 5 to 10 quotes containing exceptional data, concrete facts, or particularly concise statements. Reproduce each quote verbatim. One quote per line in the format: **Label:** "verbatim quote" — use the label exactly as it appears in the transcript (do not invent names; use neutral labels where applicable).
+    Structure: Use exactly this Markdown outline with section headings in {lang} (same meaning as these sections):
+        ## Metadata — date of episode/publication, episode number. If nothing mentioned, state that no metadata was mentioned (in {lang}).
+        ## Summary in One Sentence — core topic in one concise sentence.
+        ## Key Arguments & Insights — bullet points with the core statements.
+        ## Data & Facts — all significant numbers, statistics, or dates.
+        ## Most Important Quotes — select 5 to 10 quotes with exceptional data, concrete facts, or particularly concise statements. Reproduce each quote verbatim. One quote per line: **Label:** "verbatim quote" — use the label exactly as it appears in the transcript (do not invent names; use neutral labels where applicable).
     Style: Factual, concise, informative. No filler words.
-    Limit: Summary maximum approx. 800 words; quotes verbatim from the text."#;
+    Limit: Summary maximum approx. 800 words; quotes verbatim from the text."#
+    )
+}
 
 /// Prefer splitting at Whisper lines (`[HH:MM:SS] …`), never mid-timestamp when avoidable.
 fn split_chunks(text: &str, max_chars: usize) -> Vec<String> {
@@ -419,12 +420,14 @@ pub async fn generate_summary(
     } else {
         transcript.to_string()
     };
+    let lang = resolve_summary_language(&cfg.summary_language);
+    let system = summary_system_prompt(&lang);
     call_llm(
         client,
         &cfg.api_model,
         cfg.temperature,
         cfg.max_tokens,
-        SYSTEM_PROMPT_SUMMARY,
+        &system,
         &format!("Transcript:\n\n{text_for_summary}"),
     )
     .await

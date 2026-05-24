@@ -11,6 +11,7 @@ export const defaultConfig = (): AppConfig => ({
   whisperModel: "turbo",
   whisperThreads: null,
   language: "de",
+  summaryLanguage: "system",
   useGpu: true,
   deleteSourceAfterSuccess: true,
   whisperVerbose: false,

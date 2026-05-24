@@ -9,6 +9,8 @@ export interface AppConfig {
   whisperModel: string;
   whisperThreads: number | null;
   language: string;
+  /** `"system"` or ISO 639-1 code for LLM summary output */
+  summaryLanguage: string;
   useGpu: boolean;
   deleteSourceAfterSuccess: boolean;
   whisperVerbose: boolean;
