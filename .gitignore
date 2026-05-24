@@ -22,3 +22,39 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# --- Secrets & local app data ---
+.env
+.env.*
+!.env.example
+API_KEY*.env
+**/voxmd-settings.json
+
+# --- IDE / agent (not for distribution) ---
+.cursor/
+
+# --- Build & install artifacts ---
+src-tauri/target/
+**/target/
+portable-dist/
+*.deb
+*.rpm
+*.AppImage
+*.msi
+*-setup.exe
+voxmd
+voxmd.exe
+VoxMD.exe
+
+# --- Ad-hoc local assets ---
+VoxMD.jpg
+
+# --- OS / NAS (SynologyDrive) ---
+Thumbs.db
+Desktop.ini
+@eaDir/
+#recycle/
+
+# --- Misc local ---
+*.profraw
+coverage/

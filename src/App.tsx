@@ -693,15 +693,6 @@ export default function App() {
                 />
                 <span>Delete source audio after successful MD export</span>
               </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={config.whisperVerbose}
-                  onChange={(e) => setConfig({ ...config, whisperVerbose: e.target.checked })}
-                />
-                <span>Whisper verbose output (WHISPER_CPP_VERBOSE)</span>
-              </label>
-
               <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
                 <button type="button" className="btn-primary" disabled={!storeReady} onClick={() => saveConfig(config)}>
                   Save

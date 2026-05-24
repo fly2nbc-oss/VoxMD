@@ -26,9 +26,6 @@ pub struct AppConfig {
     pub use_gpu: bool,
     #[serde(default = "default_true")]
     pub delete_source_after_success: bool,
-    /// Enable whisper.cpp progress/realtime output (WHISPER_CPP_VERBOSE)
-    #[serde(default)]
-    pub whisper_verbose: bool,
 }
 
 fn default_true() -> bool {
@@ -87,7 +84,6 @@ impl Default for AppConfig {
             summary_language: default_summary_language(),
             use_gpu: default_true(),
             delete_source_after_success: true,
-            whisper_verbose: false,
         }
     }
 }

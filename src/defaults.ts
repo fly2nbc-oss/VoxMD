@@ -1,6 +1,6 @@
 import type { AppConfig } from "./types";
 
-/** Defaults from API_KEY_Deepseek.env (Audio-Transcript); API key is not imported. */
+/** Default settings; API key is entered by the user and stored locally only. */
 export const defaultConfig = (): AppConfig => ({
   apiKey: "",
   apiBaseUrl: "https://api.deepseek.com",
@@ -14,5 +14,4 @@ export const defaultConfig = (): AppConfig => ({
   summaryLanguage: "system",
   useGpu: true,
   deleteSourceAfterSuccess: true,
-  whisperVerbose: false,
 });

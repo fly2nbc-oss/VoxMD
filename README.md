@@ -37,7 +37,7 @@ Dark mode uses the same layout with theme colours from Settings / system prefere
 - **Pipelined processing**: At most **one** Whisper transcription and **one** LLM job run at the same time (bounded queue). While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more than one of each stage.
 - **Progress**: Per-file **Status** badge plus **Details** (timestamps / LLM chunk progress); footer shows overall queue progress and optional model-download progress.
 - **English UI** with light/dark theme (slate-blue accents, Lucide outline icons).
-- **Settings**: API URL, key, LLM model, temperature, max tokens, transcript chunk size, Whisper model name or local GGUF path, transcription language (Whisper), **summary language** (default: system locale; or ISO code), optional Whisper verbose logging, delete-after-success — persisted via `@tauri-apps/plugin-store`.
+- **Settings**: API URL, key, LLM model, temperature, max tokens, transcript chunk size, Whisper model name or local GGUF path, transcription language (Whisper), **summary language** (default: system locale; or ISO code), delete-after-success — persisted via `@tauri-apps/plugin-store`.
 - **Whisper models**: Known names (e.g. `turbo`) download from Hugging Face into `~/.cache/voxmd/whisper/`; dropdown shows size hints and cache status; **Clear cache** removes downloaded models.
 - **Audio formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (decoded via Symphonia).
 - **Optional Vulkan**: Cargo feature `gpu-vulkan` for GPU-backed Whisper where the system provides Vulkan.
@@ -67,7 +67,6 @@ Output: a `.md` file next to each audio file (same folder).
 | Transcription language | ISO 639-1 code for Whisper (e.g. `de`) | `de` |
 | Summary language | `system` (OS locale) or ISO 639-1 for LLM summary headings and text | `system` |
 | Delete source after success | Remove source audio after a successful `.md` write | ✅ |
-| Whisper verbose output | Forward whisper.cpp debug/progress to the terminal | ☐ |
 
 ### Model selection
 

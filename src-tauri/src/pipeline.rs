@@ -77,9 +77,6 @@ fn transcribe_one(
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some(&cfg.language));
     params.set_n_threads(whisper_threads(cfg) as i32);
-    params.set_print_progress(cfg.whisper_verbose);
-    params.set_print_realtime(cfg.whisper_verbose);
-
     state
         .full(params, &samples)
         .map_err(|e| format!("Whisper inference: {e}"))?;

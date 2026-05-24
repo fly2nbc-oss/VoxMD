@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+### Changed
+
+- Repository is **public**; README dynamic release/CI badges work via shields.io.
+- Release workflow publishes GitHub releases immediately (`releaseDraft: false`).
+
+### Removed
+
+- **Whisper verbose output** setting.
+- `VoxMD.jpg` and `.cursor/plans/` from version control; expanded `.gitignore` for secrets, builds, and local IDE data.
+
 ## [0.9.6] - 2026-05-24
 
 ### Added

@@ -111,7 +111,7 @@ jobs:
             Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
 
             See [CHANGELOG.md](https://github.com/fly2nbc-oss/VoxMD/blob/main/CHANGELOG.md) for details.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
 
       - name: Prepare Windows portable EXE (rename for release)

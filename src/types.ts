@@ -13,5 +13,4 @@ export interface AppConfig {
   summaryLanguage: string;
   useGpu: boolean;
   deleteSourceAfterSuccess: boolean;
-  whisperVerbose: boolean;
 }
