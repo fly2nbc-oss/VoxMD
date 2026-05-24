@@ -219,9 +219,14 @@ async fn llm_stage(
         return;
     }
 
-    if cfg.delete_source_after_success {
-        let _ = std::fs::remove_file(&job.path);
-    }
+    let deletion_note = if cfg.delete_source_after_success {
+        match std::fs::remove_file(&job.path) {
+            Ok(()) => String::new(),
+            Err(e) => format!(" (source deletion failed: {e})"),
+        }
+    } else {
+        String::new()
+    };
 
     let c = done_counter.fetch_add(1, Ordering::SeqCst) + 1;
     emit_job(
@@ -241,7 +246,7 @@ async fn llm_stage(
                     100.0
                 },
             }),
-            message: Some(format!("Saved: {}", md_path.display())),
+            message: Some(format!("Saved: {}{}", md_path.display(), deletion_note)),
         },
     );
 }
@@ -353,11 +358,11 @@ pub async fn run_batch(app: AppHandle, paths: Vec<PathBuf>, cfg: AppConfig) -> R
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.use_gpu = cfg!(feature = "gpu-vulkan") && cfg_w.use_gpu;
 
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().unwrap_or_default(),
-            ctx_params,
-        )
-        .map_err(|e| format!("Whisper init: {e}"))?;
+        let model_path_str = model_path
+            .to_str()
+            .ok_or_else(|| "Whisper model path contains non-UTF-8 characters".to_string())?;
+        let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
+            .map_err(|e| format!("Whisper init: {e}"))?;
 
         let n_items = work.len();
         for idx in 0..n_items {

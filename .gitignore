@@ -32,6 +32,7 @@ API_KEY*.env
 
 # --- IDE / agent (not for distribution) ---
 .cursor/
+.claude/
 
 # --- Build & install artifacts ---
 src-tauri/target/

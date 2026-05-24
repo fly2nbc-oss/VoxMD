@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-05-25
+
+### Fixed
+
+- Config validation: API URL scheme, numeric bounds, local Whisper paths (`.bin`/`.gguf`), non-UTF-8 model path rejection.
+- Pipeline: surface source-file deletion failures in job status; reject non-UTF-8 Whisper paths explicitly.
+- Frontend: clearer error messages (`toMsg`), guarded numeric settings inputs, warn when model list unavailable.
+- Directory scan: canonicalize folder paths before walking.
+
+### Changed
+
+- Remove unused Vite/Tauri template assets in `public/`.
+
+### Removed
+
+- Default `public/` SVG favicons (app icons remain under `src-tauri/icons/`).
+
 ## [0.9.7] - 2026-05-24
 
 ### Changed

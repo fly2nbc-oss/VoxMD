@@ -41,6 +41,10 @@ function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppConfig {
   };
 }
 
+function toMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 function isSummarySystemLanguage(lang: string): boolean {
   return lang.trim().toLowerCase() === "system";
 }
@@ -111,6 +115,7 @@ export default function App() {
   const [vulkanAvailable, setVulkanAvailable] = useState<boolean | null>(null);
   const [detectedSystemSummaryLang, setDetectedSystemSummaryLang] = useState("");
   const settingsWasOpen = useRef(false);
+  const storeRef = useRef<Awaited<ReturnType<typeof Store.load>> | null>(null);
 
   useEffect(() => {
     if (!aboutOpen) return;
@@ -131,6 +136,7 @@ export default function App() {
     (async () => {
       try {
         const store = await Store.load(STORE_FILE, { autoSave: true, defaults: {} });
+        storeRef.current = store;
         const saved = await store.get<AppConfig>(CONFIG_KEY);
         setConfig(mergeConfig(saved ?? undefined));
         setStoreReady(true);
@@ -144,8 +150,8 @@ export default function App() {
     try {
       const infos = await invoke<Array<{ name: string; sizeHint: string; cached: boolean }>>("list_whisper_models");
       setModelInfos(infos);
-    } catch {
-      // silently ignore if command unavailable
+    } catch (e) {
+      console.warn("list_whisper_models unavailable:", e);
     }
   }, []);
 
@@ -169,14 +175,14 @@ export default function App() {
       await invoke("clear_whisper_cache");
       await refreshModelInfos();
     } catch (e) {
-      setStatusMsg(String(e));
+      setStatusMsg(toMsg(e));
     } finally {
       setClearingCache(false);
     }
   }, [refreshModelInfos]);
 
   const saveConfig = useCallback(async (c: AppConfig) => {
-    const store = await Store.load(STORE_FILE, { autoSave: true, defaults: {} });
+    const store = storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
     await store.set(CONFIG_KEY, c);
     await store.save();
     setConfig(c);
@@ -282,7 +288,7 @@ export default function App() {
       setProcessing(true);
       setOverall({ completed: 0, total: paths.length });
     } catch (e) {
-      setStatusMsg(String(e));
+      setStatusMsg(toMsg(e));
     }
   };
 
@@ -291,7 +297,7 @@ export default function App() {
       await invoke("cancel_transcription");
       setStatusMsg("Cancelling…");
     } catch (e) {
-      setStatusMsg(String(e));
+      setStatusMsg(toMsg(e));
     }
   };
 
@@ -505,7 +511,12 @@ export default function App() {
                     type="number"
                     step="0.1"
                     value={config.temperature}
-                    onChange={(e) => setConfig({ ...config, temperature: Number(e.target.value) })}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v)) {
+                        setConfig({ ...config, temperature: Math.min(Math.max(v, 0), 2) });
+                      }
+                    }}
                   />
                 </div>
                 <div>
@@ -517,7 +528,12 @@ export default function App() {
                     className="input"
                     type="number"
                     value={config.maxTokens}
-                    onChange={(e) => setConfig({ ...config, maxTokens: Number(e.target.value) })}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v >= 1) {
+                        setConfig({ ...config, maxTokens: Math.min(Math.floor(v), 131_072) });
+                      }
+                    }}
                   />
                 </div>
               </div>
@@ -530,7 +546,12 @@ export default function App() {
                   className="input"
                   type="number"
                   value={config.transcriptChunkChars}
-                  onChange={(e) => setConfig({ ...config, transcriptChunkChars: Number(e.target.value) })}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 256) {
+                      setConfig({ ...config, transcriptChunkChars: Math.floor(v) });
+                    }
+                  }}
                 />
               </div>
               <div>
@@ -604,7 +625,13 @@ export default function App() {
                   onChange={(e) =>
                     setConfig({
                       ...config,
-                      whisperThreads: e.target.value === "" ? null : Number(e.target.value),
+                      whisperThreads:
+                        e.target.value === ""
+                          ? null
+                          : (() => {
+                              const v = Number(e.target.value);
+                              return Number.isInteger(v) && v >= 1 ? v : config.whisperThreads;
+                            })(),
                     })
                   }
                 />

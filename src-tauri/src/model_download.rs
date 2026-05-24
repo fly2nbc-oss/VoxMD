@@ -58,7 +58,10 @@ pub fn list_models() -> Vec<ModelInfo> {
         .iter()
         .filter(|(name, filename, _)| {
             // deduplicate aliases: skip if a prior entry has the same filename
-            let idx = MODELS.iter().position(|(_, f, _)| f == filename).unwrap();
+            let idx = MODELS
+                .iter()
+                .position(|(_, f, _)| f == filename)
+                .expect("invariant: filename came from MODELS so must be found");
             MODELS[idx].0 == *name
         })
         .map(|(name, filename, size_hint)| {

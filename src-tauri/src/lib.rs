@@ -24,6 +24,8 @@ fn collect_audio_in_directory(dir: String) -> Result<Vec<String>, String> {
     if !root.is_dir() {
         return Err("Path is not a directory.".to_string());
     }
+    let root =
+        std::fs::canonicalize(&root).map_err(|e| format!("Cannot resolve directory: {e}"))?;
     let mut out: Vec<String> = walkdir::WalkDir::new(&root)
         .into_iter()
         .filter_map(|e| e.ok())
