@@ -7,10 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-05-24
+
 ### Changed
 
 - Repository is **public**; README dynamic release/CI badges work via shields.io.
 - Release workflow publishes GitHub releases immediately (`releaseDraft: false`).
+- CI: Windows `rust-cache` post-step no longer fails (`cache-targets: false`, `CARGO_TARGET_DIR` set before cache).
 
 ### Removed
 
