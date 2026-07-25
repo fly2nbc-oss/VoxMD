@@ -27,7 +27,10 @@ npm run tauri dev
 
 ```bash
 npm run build               # Frontend (TypeScript + Vite)
-cargo check --manifest-path src-tauri/Cargo.toml   # Rust library/binary
+cd src-tauri
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
 Optional full desktop bundle:
@@ -46,10 +49,13 @@ Linux AppImage bundling requires `linuxdeploy` where enabled in `tauri.conf.json
 
 ## Continuous Integration
 
-`.github/workflows/ci.yml` runs on pushes and PRs targeting **`main`** for:
+`.github/workflows/ci.yml` runs on pushes and PRs targeting **`main`**:
 
+- **Lint & Test (Linux)** — `npm run build` (tsc), `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`; gates the build matrix
 - **Ubuntu 24.04** — full Tauri build with `gpu-vulkan`
 - **Windows** — full Tauri build with `gpu-vulkan`
+
+Superseded runs on the same branch/PR are cancelled automatically. Dependabot keeps GitHub Actions, Cargo, and npm dependencies current (weekly, grouped).
 
 Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same matrix** (Linux + Windows). Published checksum files are named `SHA256SUMS-linux.txt` and `SHA256SUMS-windows.txt`.
 
@@ -57,15 +63,19 @@ Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same
 
 - Keep changes small and focused.
 - Describe motivation and — for UI changes — attach screenshots (light/dark if relevant).
-- `npm run build` and `cargo check --manifest-path src-tauri/Cargo.toml` must pass.
+- `npm run build`, `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test` must pass (the CI check job runs exactly these).
 
 ## Whisper Models
 
 Either configure a **preset name** (downloaded automatically on demand) or an absolute path to a local `.gguf` file in Settings.
 
-## LLM Transcript Stage
+## LLM Summary Stage
 
-Speaker tagging splits the raw Whisper text into chunks (`transcript_chunk_chars`). Invalid chunk outputs trigger one automatic repair attempt before the job fails — if you adjust prompts in `src-tauri/src/llm.rs`, keep the `[HH:MM:SS] **Label:**` contract in mind.
+The transcript in the output is the **raw Whisper text** (`[HH:MM:SS] text` lines) — there is no LLM pass over the transcript itself. The only LLM call is the summary (`generate_summary` in `src-tauri/src/llm.rs`): one request per file, prompt authored in English, output language enforced via the summary-language setting, fixed sampling (temperature 0.3, 8192 max tokens — not user-configurable). Podcast episode metadata (feed, title, date) is passed as orientation context. **Without an API key the summary is skipped silently** (`AppConfig::summary_enabled`), so runs work fully offline.
+
+## Podcast Feeds
+
+`src-tauri/src/podcast.rs` parses RSS/Atom via `feed-rs` and only lists entries with an audio enclosure. Episodes are downloaded lazily into a self-deleting temp file inside the Whisper stage — the bounded-pipeline contract (one Whisper + one LLM job in flight) is unaffected.
 
 ## Code of Conduct
 

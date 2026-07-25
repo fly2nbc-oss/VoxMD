@@ -6,16 +6,11 @@ pub struct AppConfig {
     pub api_key: String,
     pub api_base_url: String,
     pub api_model: String,
-    pub temperature: f32,
-    pub max_tokens: u32,
-    pub transcript_chunk_chars: usize,
     /// Whisper model: name ("turbo", "large-v3", "medium", "small", "base", "tiny")
     /// or absolute path to a local .bin / .gguf file.
     /// Aliases: whisperModelPath (old store key) → whisperModel.
     #[serde(alias = "whisperModelPath")]
     pub whisper_model: String,
-    #[serde(default)]
-    pub whisper_threads: Option<usize>,
     #[serde(default = "default_language")]
     pub language: String,
     /// Summary language: `"system"` or ISO 639-1 code (e.g. `de`, `en`).
@@ -24,8 +19,21 @@ pub struct AppConfig {
     /// Use GPU (only effective when built with feature `gpu-vulkan`)
     #[serde(default = "default_true")]
     pub use_gpu: bool,
+    /// Only applies to local files; podcast episode downloads are always temporary.
     #[serde(default = "default_true")]
     pub delete_source_after_success: bool,
+    /// Write a metadata block (episode/file info) at the top of the Markdown output.
+    #[serde(default = "default_true")]
+    pub include_meta: bool,
+    /// Generate an LLM summary. Only effective with an API key (see `summary_enabled`).
+    #[serde(default = "default_true")]
+    pub include_summary: bool,
+    /// Write the raw Whisper transcript into the Markdown output.
+    #[serde(default = "default_true")]
+    pub include_transcript: bool,
+    /// Last used output folder for podcast episode Markdown files (frontend convenience).
+    #[serde(default)]
+    pub podcast_output_dir: String,
 }
 
 fn default_true() -> bool {
@@ -75,15 +83,15 @@ impl Default for AppConfig {
             api_key: String::new(),
             api_base_url: "https://api.deepseek.com".to_string(),
             api_model: "deepseek-v4-pro".to_string(),
-            temperature: 0.7,
-            max_tokens: 65_536,
-            transcript_chunk_chars: 32_768,
             whisper_model: "turbo".to_string(),
-            whisper_threads: None,
             language: default_language(),
             summary_language: default_summary_language(),
             use_gpu: default_true(),
             delete_source_after_success: true,
+            include_meta: true,
+            include_summary: true,
+            include_transcript: true,
+            podcast_output_dir: String::new(),
         }
     }
 }
@@ -100,32 +108,34 @@ fn looks_like_whisper_path(model: &str) -> bool {
 }
 
 impl AppConfig {
+    /// The summary is only generated when enabled AND an API key is present;
+    /// without a key it is skipped silently instead of failing the run.
+    pub fn summary_enabled(&self) -> bool {
+        self.include_summary && !self.api_key.trim().is_empty()
+    }
+
     pub fn validate_for_run(&self) -> Result<(), String> {
-        if self.api_key.trim().is_empty() {
-            return Err("API key missing (Settings).".to_string());
+        if !self.summary_enabled() && !self.include_transcript {
+            return Err(if self.include_summary {
+                "No API key: the summary is skipped and the transcript is disabled — the output \
+                 would be empty. Enter an API key or enable the transcript (Settings)."
+                    .to_string()
+            } else {
+                "Markdown output is empty: enable at least Summary or Transcript (Settings)."
+                    .to_string()
+            });
         }
-        let url = self.api_base_url.trim();
-        if url.is_empty() {
-            return Err("API base URL missing.".to_string());
-        }
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err("API base URL must start with http:// or https://.".to_string());
-        }
-        if self.api_model.trim().is_empty() {
-            return Err("API model missing.".to_string());
-        }
-        if !self.temperature.is_finite() || !(0.0..=2.0).contains(&self.temperature) {
-            return Err("Temperature must be between 0 and 2.".to_string());
-        }
-        if self.max_tokens == 0 || self.max_tokens > 131_072 {
-            return Err("Max tokens must be between 1 and 131072.".to_string());
-        }
-        if self.transcript_chunk_chars < 256 {
-            return Err("Transcript chunk size must be at least 256 characters.".to_string());
-        }
-        if let Some(t) = self.whisper_threads {
-            if t == 0 {
-                return Err("Whisper CPU threads must be at least 1.".to_string());
+        // API access is only required when the summary will actually run.
+        if self.summary_enabled() {
+            let url = self.api_base_url.trim();
+            if url.is_empty() {
+                return Err("API base URL missing.".to_string());
+            }
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err("API base URL must start with http:// or https://.".to_string());
+            }
+            if self.api_model.trim().is_empty() {
+                return Err("API model missing.".to_string());
             }
         }
         let model = self.whisper_model.trim();
@@ -173,19 +183,64 @@ mod tests {
 
     #[test]
     fn validate_rejects_bad_api_url() {
-        let mut cfg = AppConfig::default();
-        cfg.api_key = "k".into();
-        cfg.api_base_url = "ftp://example.com".into();
+        let cfg = AppConfig {
+            api_key: "k".into(),
+            api_base_url: "ftp://example.com".into(),
+            ..AppConfig::default()
+        };
         assert!(cfg.validate_for_run().is_err());
     }
 
     #[test]
     fn validate_custom_whisper_path() {
-        let mut cfg = AppConfig::default();
-        cfg.api_key = "k".into();
-        cfg.whisper_model = "/no/such/model.gguf".into();
+        let cfg = AppConfig {
+            api_key: "k".into(),
+            whisper_model: "/no/such/model.gguf".into(),
+            ..AppConfig::default()
+        };
         let err = cfg.validate_for_run().unwrap_err();
         assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn validate_skips_api_checks_without_summary() {
+        // No API key set — still valid, since only the transcript is written.
+        let cfg = AppConfig {
+            include_summary: false,
+            ..AppConfig::default()
+        };
+        assert!(cfg.validate_for_run().is_ok());
+    }
+
+    #[test]
+    fn summary_without_key_is_skipped_not_an_error() {
+        // Summary enabled but no key: run is valid, summary just won't happen.
+        let cfg = AppConfig::default();
+        assert!(cfg.include_summary);
+        assert!(!cfg.summary_enabled());
+        assert!(cfg.validate_for_run().is_ok());
+    }
+
+    #[test]
+    fn summary_without_key_and_no_transcript_is_rejected() {
+        let cfg = AppConfig {
+            include_transcript: false,
+            ..AppConfig::default()
+        };
+        let err = cfg.validate_for_run().unwrap_err();
+        assert!(err.contains("No API key"));
+    }
+
+    #[test]
+    fn validate_rejects_empty_output() {
+        let cfg = AppConfig {
+            api_key: "k".into(),
+            include_summary: false,
+            include_transcript: false,
+            ..AppConfig::default()
+        };
+        let err = cfg.validate_for_run().unwrap_err();
+        assert!(err.contains("Summary or Transcript"));
     }
 
     #[test]

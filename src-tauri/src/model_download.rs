@@ -4,19 +4,18 @@ use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-const HF_BASE: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const HF_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
 /// All officially supported whisper.cpp model names → GGUF filename.
 pub const MODELS: &[(&str, &str, &str)] = &[
-    ("tiny",           "ggml-tiny.bin",               "~75 MB"),
-    ("base",           "ggml-base.bin",               "~142 MB"),
-    ("small",          "ggml-small.bin",              "~466 MB"),
-    ("medium",         "ggml-medium.bin",             "~1.5 GB"),
-    ("large-v2",       "ggml-large-v2.bin",           "~3.1 GB"),
-    ("large-v3",       "ggml-large-v3.bin",           "~3.1 GB"),
-    ("turbo",          "ggml-large-v3-turbo.bin",     "~809 MB"),
-    ("large-v3-turbo", "ggml-large-v3-turbo.bin",     "~809 MB"),
+    ("tiny", "ggml-tiny.bin", "~75 MB"),
+    ("base", "ggml-base.bin", "~142 MB"),
+    ("small", "ggml-small.bin", "~466 MB"),
+    ("medium", "ggml-medium.bin", "~1.5 GB"),
+    ("large-v2", "ggml-large-v2.bin", "~3.1 GB"),
+    ("large-v3", "ggml-large-v3.bin", "~3.1 GB"),
+    ("turbo", "ggml-large-v3-turbo.bin", "~809 MB"),
+    ("large-v3-turbo", "ggml-large-v3-turbo.bin", "~809 MB"),
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,7 +71,11 @@ pub fn list_models() -> Vec<ModelInfo> {
                 filename: filename.to_string(),
                 size_hint: size_hint.to_string(),
                 cached,
-                path: if cached { Some(p.to_string_lossy().into_owned()) } else { None },
+                path: if cached {
+                    Some(p.to_string_lossy().into_owned())
+                } else {
+                    None
+                },
             }
         })
         .collect()
@@ -138,10 +141,7 @@ async fn download_file(
         .map_err(|e| format!("Download '{url}': {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!(
-            "Download failed: HTTP {} – '{url}'",
-            resp.status()
-        ));
+        return Err(format!("Download failed: HTTP {} – '{url}'", resp.status()));
     }
 
     let total = resp.content_length().unwrap_or(0);

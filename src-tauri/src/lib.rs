@@ -4,37 +4,17 @@ mod llm;
 mod meta;
 mod model_download;
 mod pipeline;
-
-use std::path::PathBuf;
+mod podcast;
 
 use config::AppConfig;
-use meta::is_audio_file;
 use model_download::ModelInfo;
+use podcast::{EpisodeInfo, QueueItem};
 use serde::Serialize;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VulkanStatus {
     built_with_vulkan: bool,
-}
-
-#[tauri::command]
-fn collect_audio_in_directory(dir: String) -> Result<Vec<String>, String> {
-    let root = PathBuf::from(dir.trim());
-    if !root.is_dir() {
-        return Err("Path is not a directory.".to_string());
-    }
-    let root =
-        std::fs::canonicalize(&root).map_err(|e| format!("Cannot resolve directory: {e}"))?;
-    let mut out: Vec<String> = walkdir::WalkDir::new(&root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| is_audio_file(e.path()))
-        .map(|e| e.path().to_string_lossy().to_string())
-        .collect();
-    out.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    Ok(out)
 }
 
 #[tauri::command]
@@ -78,16 +58,21 @@ fn system_summary_language() -> String {
     config::resolve_summary_language("system")
 }
 
+/// Loads an RSS/Atom feed and returns its episodes (audio enclosures only).
+#[tauri::command]
+async fn fetch_podcast_feed(url: String) -> Result<Vec<EpisodeInfo>, String> {
+    podcast::fetch_feed(&url).await
+}
+
 #[tauri::command]
 async fn start_transcription(
     app: tauri::AppHandle,
-    paths: Vec<String>,
+    items: Vec<QueueItem>,
     config: AppConfig,
 ) -> Result<(), String> {
     config.validate_for_run()?;
-    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     tokio::spawn(async move {
-        let _ = pipeline::run_batch(app, paths, config).await;
+        let _ = pipeline::run_batch(app, items, config).await;
     });
     Ok(())
 }
@@ -103,11 +88,11 @@ pub fn run() {
             cancel_transcription,
             processing_state,
             vulkan_status,
-            collect_audio_in_directory,
             list_whisper_models,
             whisper_cache_dir,
             clear_whisper_cache,
             system_summary_language,
+            fetch_podcast_feed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running VoxMD");

@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+# One release run per tag; never cancel a publish in progress.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     permissions:

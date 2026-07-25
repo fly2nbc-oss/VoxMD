@@ -156,6 +156,17 @@ button:disabled {
   color: var(--status-error);
 }
 
+/* Active state of the "delete source after success" toolbar toggle. */
+.icon-btn-toggle-danger {
+  color: var(--status-error);
+  background: var(--status-error-bg);
+}
+
+.icon-btn-toggle-danger:hover:not(:disabled) {
+  background: var(--status-error-bg);
+  color: var(--status-error);
+}
+
 .app-bar .icon-btn {
   min-width: 32px;
   min-height: 32px;
@@ -366,6 +377,34 @@ select.input {
   background: var(--status-error-bg);
 }
 
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xl);
+  background: rgba(15, 25, 35, 0.45);
+}
+
+.drop-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+  height: 100%;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .drawer-overlay {
   position: fixed;
   inset: 0;
@@ -407,6 +446,18 @@ select.input {
   justify-content: center;
   align-items: center;
   padding: var(--space-md);
+}
+
+.modal-dialog {
+  width: min(460px, 100%);
+  max-height: min(520px, 90vh);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .about-dialog {

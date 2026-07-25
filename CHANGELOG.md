@@ -7,6 +7,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-12
+
+### Added
+
+- **Podcast feeds**: new toolbar button loads an RSS/Atom feed (`feed-rs`) and queues all episodes with audio enclosures. Episodes are downloaded lazily into a self-deleting temp file during the Whisper stage; the Markdown lands in a per-feed output folder chosen in the dialog (last folder remembered).
+- **Queue selection**: checkbox column with select-all and a **Remove** toolbar button to drop marked entries from the list.
+- **Markdown output toggles** in Settings: metadata block (file / episode info), LLM summary, and transcript can be enabled independently (at least one of summary/transcript required). With the summary disabled, no API key is needed.
+- **Drag & drop**: audio files dropped anywhere in the window are added to the queue (same formats as the file picker; unsupported items are ignored with a note).
+- New job stage **Download** with percentage progress for podcast episodes.
+- `SECURITY.md`, Dependabot config (GitHub Actions, Cargo, npm — weekly, grouped).
+
+### Changed
+
+- **Summary requires an API key**: without one it is skipped silently instead of failing the run (`AppConfig::summary_enabled`); the API fields in Settings are greyed out while the summary is disabled.
+- **Delete source after success** moved from Settings into the toolbar as a trash-icon toggle (persists immediately; red = active). It only applies to local files — episode downloads are always temporary.
+- Settings **Save** now shows a confirmation state and closes the panel; errors keep it open.
+- **Files** and **Podcast** now append to the queue (deduplicated) instead of replacing it.
+- Summary prompt rewritten: no speaker labels, quotes cite `[HH:MM:SS]` timestamps, sections are omitted when empty, episode metadata is passed as context, fixed sampling (temperature 0.3).
+- Transcript section in the output is the raw Whisper text under `## Transcript` (was the LLM-labelled text under `## Original Transcript`).
+- Markdown filenames keep dots in titles (`Path::with_extension` no longer truncates e.g. `Ep. 5 - …`).
+- CI: new lint/test gate job (tsc, `cargo fmt`, `clippy -D warnings`, `cargo test`) before the build matrix; concurrency groups cancel superseded runs.
+
+### Removed
+
+- **Speaker detection / labelling** (LLM transcript pass, chunking, format validation, repair pass) — the LLM is now only used for the summary.
+- **Transcript chunk size** setting (`transcriptChunkChars`) — obsolete without the transcript LLM pass.
+- **Temperature**, **Max tokens**, and **Whisper CPU threads** settings — the summary uses fixed sampling (0.3 / 8192) and Whisper auto-detects threads (cores − 1). Old stored values are dropped on load.
+- **Folder** toolbar button and the `collect_audio_in_directory` command (use multi-select in the file picker; `walkdir` dependency dropped).
+
 ## [0.9.8] - 2026-05-25
 
 ### Fixed

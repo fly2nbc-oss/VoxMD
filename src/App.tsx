@@ -1,24 +1,29 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Store } from "@tauri-apps/plugin-store";
 import {
+  Check,
   CircleStop,
   FileAudio2,
   FolderOpen,
   Info,
+  ListX,
   Loader2,
   Moon,
   Play,
+  Rss,
   Settings,
   Sun,
+  Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultConfig } from "./defaults";
-import type { AppConfig } from "./types";
+import type { AppConfig, EpisodeInfo, QueueItem } from "./types";
 import appIcon from "../src-tauri/icons/128x128.png";
 
 const STORE_FILE = "voxmd-settings.json";
@@ -26,18 +31,41 @@ const CONFIG_KEY = "appConfig";
 
 const GITHUB_URL = "https://github.com/fly2nbc-oss/VoxMD";
 
+const AUDIO_EXTENSIONS = ["mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus"];
+
+function isAudioPath(p: string): boolean {
+  const ext = p.split(".").pop()?.toLowerCase() ?? "";
+  return AUDIO_EXTENSIONS.includes(ext);
+}
+
+function localItem(path: string): QueueItem {
+  return {
+    id: path,
+    kind: "local",
+    source: path,
+    displayName: path.split(/[/\\]/).pop() ?? path,
+  };
+}
+
+/** Explicit field picking also drops keys from older versions (temperature, maxTokens, …). */
 function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppConfig {
   const base = defaultConfig();
   if (!saved) return base;
   return {
-    ...base,
-    ...saved,
     apiKey: saved.apiKey?.trim() ?? "",
     apiBaseUrl: saved.apiBaseUrl?.trim() ? saved.apiBaseUrl : base.apiBaseUrl,
     apiModel: saved.apiModel?.trim() ? saved.apiModel : base.apiModel,
+    whisperModel: saved.whisperModel?.trim() ? saved.whisperModel : base.whisperModel,
+    language: saved.language?.trim() ? saved.language : base.language,
     summaryLanguage: saved.summaryLanguage?.trim()
       ? saved.summaryLanguage.trim()
       : base.summaryLanguage,
+    useGpu: saved.useGpu ?? base.useGpu,
+    deleteSourceAfterSuccess: saved.deleteSourceAfterSuccess ?? base.deleteSourceAfterSuccess,
+    includeMeta: saved.includeMeta ?? base.includeMeta,
+    includeSummary: saved.includeSummary ?? base.includeSummary,
+    includeTranscript: saved.includeTranscript ?? base.includeTranscript,
+    podcastOutputDir: saved.podcastOutputDir ?? base.podcastOutputDir,
   };
 }
 
@@ -54,24 +82,23 @@ interface JobProgressPayload {
   displayName: string;
   stage: string;
   whisperPct?: number;
-  llmChunk?: [number, number];
+  downloadPct?: number;
   overall?: { completed: number; total: number; pct: number };
   message?: string;
 }
 
-interface JobRow extends JobProgressPayload {
-  whisperPct?: number;
-}
+type JobRow = JobProgressPayload;
 
 function badgeForStage(stage: string): { className: string; label: string } {
   switch (stage) {
-    case "done":    return { className: "badge-ok",      label: "Done"    };
-    case "error":   return { className: "badge-error",   label: "Error"   };
-    case "skipped": return { className: "badge-warn",    label: "Skipped" };
-    case "whisper": return { className: "badge-warn",    label: "Whisper" };
-    case "llm":     return { className: "badge-llm",       label: "LLM"     };
-    case "queued":  return { className: "badge-neutral", label: "Wait"    };
-    default:        return { className: "badge-neutral", label: stage     };
+    case "done":     return { className: "badge-ok",      label: "Done"     };
+    case "error":    return { className: "badge-error",   label: "Error"    };
+    case "skipped":  return { className: "badge-warn",    label: "Skipped"  };
+    case "download": return { className: "badge-llm",     label: "Download" };
+    case "whisper":  return { className: "badge-warn",    label: "Whisper"  };
+    case "llm":      return { className: "badge-llm",     label: "LLM"      };
+    case "queued":   return { className: "badge-neutral", label: "Wait"     };
+    default:         return { className: "badge-neutral", label: stage      };
   }
 }
 
@@ -79,13 +106,14 @@ function detailsForRow(row: JobRow): string {
   switch (row.stage) {
     case "queued":
       return "Waiting in queue…";
+    case "download":
+      return row.downloadPct != null && row.downloadPct > 0
+        ? `Downloading episode… ${row.downloadPct}%`
+        : "Downloading episode…";
     case "whisper":
       return "Transcribing…";
     case "llm":
-      if (row.llmChunk) {
-        return `Speakers · chunk ${row.llmChunk[0]} / ${row.llmChunk[1]}`;
-      }
-      return row.message ?? "";
+      return row.message ?? "Summary…";
     case "done":
     case "error":
     case "skipped":
@@ -102,7 +130,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [storeReady, setStoreReady] = useState(false);
-  const [paths, setPaths] = useState<string[]>([]);
+  const [items, setItems] = useState<QueueItem[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [jobs, setJobs] = useState<Record<string, JobRow>>({});
   const [processing, setProcessing] = useState(false);
   const [overall, setOverall] = useState<{ completed: number; total: number } | null>(null);
@@ -114,8 +143,17 @@ export default function App() {
   const [aboutVersion, setAboutVersion] = useState<string>("");
   const [vulkanAvailable, setVulkanAvailable] = useState<boolean | null>(null);
   const [detectedSystemSummaryLang, setDetectedSystemSummaryLang] = useState("");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveError, setSaveError] = useState("");
+  const [podcastOpen, setPodcastOpen] = useState(false);
+  const [feedUrl, setFeedUrl] = useState("");
+  const [podcastDir, setPodcastDir] = useState("");
+  const [feedBusy, setFeedBusy] = useState(false);
+  const [podcastError, setPodcastError] = useState("");
+  const [dragActive, setDragActive] = useState(false);
   const settingsWasOpen = useRef(false);
   const storeRef = useRef<Awaited<ReturnType<typeof Store.load>> | null>(null);
+  const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!aboutOpen) return;
@@ -169,6 +207,12 @@ export default function App() {
       .catch(() => setDetectedSystemSummaryLang(""));
   }, [settingsOpen]);
 
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = selected.size > 0 && selected.size < items.length;
+    }
+  }, [selected, items]);
+
   const clearCache = useCallback(async () => {
     setClearingCache(true);
     try {
@@ -197,7 +241,7 @@ export default function App() {
         const p = e.payload;
         setJobs((prev) => ({
           ...prev,
-          [p.path]: { ...p, whisperPct: p.whisperPct ?? prev[p.path]?.whisperPct },
+          [p.path]: { ...p, downloadPct: p.downloadPct ?? prev[p.path]?.downloadPct },
         }));
         if (p.overall) {
           setOverall({ completed: p.overall.completed, total: p.overall.total });
@@ -233,32 +277,64 @@ export default function App() {
     };
   }, []);
 
-  const initJobsFromPaths = useCallback((ps: string[]) => {
-    const next: Record<string, JobRow> = {};
-    for (const p of ps) {
-      const name = p.split(/[/\\]/).pop() ?? p;
-      next[p] = {
-        path: p,
-        displayName: name,
-        stage: "queued",
-      };
-    }
-    setJobs(next);
-    setOverall(null);
+  /** Append new items (deduplicated by id) and queue job rows for them. */
+  const addItems = useCallback((added: QueueItem[]) => {
+    setItems((prev) => {
+      const seen = new Set(prev.map((i) => i.id));
+      const fresh = added.filter((i) => !seen.has(i.id));
+      if (fresh.length === 0) return prev;
+      setJobs((prevJobs) => {
+        const next = { ...prevJobs };
+        for (const item of fresh) {
+          next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
+        }
+        return next;
+      });
+      return [...prev, ...fresh];
+    });
   }, []);
 
-  const pickFolder = async () => {
-    const dir = await open({
-      title: "Folder with audio files",
-      directory: true,
-      recursive: true,
-    });
-    if (typeof dir !== "string" || !dir) return;
-    const list = await invoke<string[]>("collect_audio_in_directory", { dir });
-    setPaths(list);
-    initJobsFromPaths(list);
-    setStatusMsg(`${list.length} file(s) from folder.`);
-  };
+  // Native drag & drop: the Tauri webview suppresses HTML5 drops and emits
+  // its own event carrying real filesystem paths.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    (async () => {
+      const stop = await getCurrentWebview().onDragDropEvent((event) => {
+        const t = event.payload.type;
+        if (t === "enter" || t === "over") {
+          setDragActive(true);
+        } else if (t === "leave") {
+          setDragActive(false);
+        } else if (t === "drop") {
+          setDragActive(false);
+          const paths = event.payload.paths;
+          const audio = paths.filter(isAudioPath);
+          if (audio.length > 0) {
+            addItems(audio.map(localItem));
+          }
+          const ignored = paths.length - audio.length;
+          if (ignored > 0) {
+            setStatusMsg(
+              audio.length > 0
+                ? `${audio.length} file(s) added, ${ignored} unsupported item(s) ignored.`
+                : "No supported audio files in the drop.",
+            );
+          } else if (audio.length > 0) {
+            setStatusMsg(`${audio.length} file(s) added.`);
+          }
+        }
+      });
+      if (cancelled) stop();
+      else unlisten = stop;
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [addItems]);
 
   const pickFiles = async () => {
     const sel = await open({
@@ -267,26 +343,109 @@ export default function App() {
       filters: [
         {
           name: "Audio",
-          extensions: ["mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus"],
+          extensions: AUDIO_EXTENSIONS,
         },
       ],
     });
     if (!sel) return;
     const list = Array.isArray(sel) ? sel : [sel];
-    setPaths(list);
-    initJobsFromPaths(list);
-    setStatusMsg(`${list.length} file(s) selected.`);
+    addItems(list.map(localItem));
+    setStatusMsg(`${list.length} file(s) added.`);
+  };
+
+  const openPodcast = () => {
+    setFeedUrl("");
+    setPodcastDir(config.podcastOutputDir || "");
+    setPodcastError("");
+    setPodcastOpen(true);
+  };
+
+  const choosePodcastDir = async () => {
+    const dir = await open({
+      title: "Output folder for episode Markdown files",
+      directory: true,
+    });
+    if (typeof dir === "string" && dir) setPodcastDir(dir);
+  };
+
+  const addPodcast = async () => {
+    setFeedBusy(true);
+    setPodcastError("");
+    try {
+      const episodes = await invoke<EpisodeInfo[]>("fetch_podcast_feed", { url: feedUrl.trim() });
+      const dir = podcastDir;
+      addItems(
+        episodes.map((ep) => ({
+          id: ep.audioUrl,
+          kind: "podcast" as const,
+          source: ep.audioUrl,
+          displayName: ep.date ? `${ep.date} · ${ep.title}` : ep.title,
+          episode: {
+            feedTitle: ep.feedTitle,
+            title: ep.title,
+            date: ep.date,
+            link: ep.link,
+            outputDir: dir,
+          },
+        })),
+      );
+      setPodcastOpen(false);
+      setStatusMsg(`${episodes.length} episode(s) added.`);
+      if (dir !== config.podcastOutputDir) {
+        await saveConfig({ ...config, podcastOutputDir: dir });
+      }
+    } catch (e) {
+      setPodcastError(toMsg(e));
+    } finally {
+      setFeedBusy(false);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = (checked: boolean) => {
+    setSelected(checked ? new Set(items.map((i) => i.id)) : new Set());
+  };
+
+  const removeSelected = () => {
+    const count = selected.size;
+    if (count === 0) return;
+    setItems((prev) => prev.filter((i) => !selected.has(i.id)));
+    setJobs((prev) => {
+      const next: Record<string, JobRow> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (!selected.has(k)) next[k] = v;
+      }
+      return next;
+    });
+    setSelected(new Set());
+    setStatusMsg(`${count} entry(ies) removed from the list.`);
   };
 
   const start = async () => {
-    if (!paths.length) {
-      setStatusMsg("No files in queue.");
+    if (!items.length) {
+      setStatusMsg("No entries in queue.");
       return;
     }
     try {
-      await invoke("start_transcription", { paths, config });
+      await invoke("start_transcription", { items, config });
       setProcessing(true);
-      setOverall({ completed: 0, total: paths.length });
+      setSelected(new Set());
+      setJobs(() => {
+        const next: Record<string, JobRow> = {};
+        for (const item of items) {
+          next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
+        }
+        return next;
+      });
+      setOverall({ completed: 0, total: items.length });
     } catch (e) {
       setStatusMsg(toMsg(e));
     }
@@ -301,8 +460,42 @@ export default function App() {
     }
   };
 
-  const rows = useMemo(() => paths.map((p) => jobs[p] ?? { path: p, displayName: p, stage: "queued" }), [paths, jobs]);
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    setSaveState("idle");
+    setSaveError("");
+  };
 
+  const hasApiKey = config.apiKey.trim() !== "";
+  // Summary only runs with a key; without one, the transcript must carry the output.
+  const outputInvalid = !(config.includeSummary && hasApiKey) && !config.includeTranscript;
+
+  const handleSaveSettings = async () => {
+    setSaveState("saving");
+    setSaveError("");
+    try {
+      await saveConfig(config);
+      setSaveState("saved");
+      window.setTimeout(() => {
+        setSettingsOpen(false);
+        setSaveState("idle");
+      }, 700);
+    } catch (e) {
+      setSaveState("idle");
+      setSaveError(toMsg(e));
+    }
+  };
+
+  const rows = useMemo(
+    () =>
+      items.map((item) => ({
+        item,
+        job: jobs[item.id] ?? { path: item.id, displayName: item.displayName, stage: "queued" },
+      })),
+    [items, jobs],
+  );
+
+  const allSelected = items.length > 0 && selected.size === items.length;
   const overallPct = overall && overall.total > 0 ? (overall.completed / overall.total) * 100 : 0;
 
   return (
@@ -310,18 +503,28 @@ export default function App() {
       <header className="app-bar">
         <h1 className="app-bar-title">VoxMD</h1>
         <div className="app-bar-actions">
-          <button type="button" className="btn-secondary btn-sm" onClick={pickFolder} title="Folder with audio files">
-            <FolderOpen size={18} aria-hidden />
-            <span>Folder</span>
-          </button>
-          <button type="button" className="btn-secondary btn-sm" onClick={pickFiles} title="Select audio files">
+          <button type="button" className="btn-secondary btn-sm" onClick={pickFiles} title="Add audio files">
             <FileAudio2 size={18} aria-hidden />
             <span>Files</span>
+          </button>
+          <button type="button" className="btn-secondary btn-sm" onClick={openPodcast} title="Add podcast episodes from an RSS feed">
+            <Rss size={18} aria-hidden />
+            <span>Podcast</span>
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={processing || selected.size === 0}
+            onClick={removeSelected}
+            title="Remove selected entries from the list"
+          >
+            <ListX size={18} aria-hidden />
+            <span>Remove{selected.size > 0 ? ` (${selected.size})` : ""}</span>
           </button>
           <button
             type="button"
             className="btn-primary btn-sm"
-            disabled={processing || !paths.length}
+            disabled={processing || !items.length}
             onClick={start}
             title="Start processing"
           >
@@ -341,6 +544,23 @@ export default function App() {
           ) : null}
         </div>
         <div className="app-bar-end">
+          <button
+            type="button"
+            className={`icon-btn${config.deleteSourceAfterSuccess ? " icon-btn-toggle-danger" : ""}`}
+            title={
+              config.deleteSourceAfterSuccess
+                ? "Source audio is deleted after successful export — click to keep"
+                : "Source audio is kept after export — click to delete after success"
+            }
+            aria-label="Delete source audio after success"
+            aria-pressed={config.deleteSourceAfterSuccess}
+            disabled={!storeReady}
+            onClick={() =>
+              void saveConfig({ ...config, deleteSourceAfterSuccess: !config.deleteSourceAfterSuccess })
+            }
+          >
+            <Trash2 className="icon" size={20} />
+          </button>
           <button
             type="button"
             className="icon-btn"
@@ -371,26 +591,56 @@ export default function App() {
         </div>
       </header>
 
+      {dragActive ? (
+        <div className="drop-overlay" aria-hidden>
+          <div className="drop-overlay-inner">
+            <FileAudio2 size={40} aria-hidden />
+            <p>Drop audio files to add them to the queue</p>
+          </div>
+        </div>
+      ) : null}
+
       <main className="content">
-        {paths.length === 0 ? (
-          <p className="empty-title">Choose a folder or audio files, then press Start.</p>
+        {items.length === 0 ? (
+          <p className="empty-title">
+            Add audio files (or drop them anywhere in this window) or podcast episodes, then press Start.
+          </p>
         ) : (
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
-                  <th style={{ width: "40%" }}>File</th>
-                  <th style={{ width: "80px" }}>Status</th>
+                  <th style={{ width: 34 }}>
+                    <input
+                      ref={headerCheckboxRef}
+                      type="checkbox"
+                      checked={allSelected}
+                      disabled={processing || !items.length}
+                      onChange={(e) => toggleSelectAll(e.target.checked)}
+                      aria-label="Select all entries"
+                    />
+                  </th>
+                  <th style={{ width: "40%" }}>File / Episode</th>
+                  <th style={{ width: "90px" }}>Status</th>
                   <th>Details</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
-                  const b = badgeForStage(row.stage);
-                  const details = detailsForRow(row);
+                {rows.map(({ item, job }) => {
+                  const b = badgeForStage(job.stage);
+                  const details = detailsForRow(job);
                   return (
-                    <tr key={row.path}>
-                      <td className="mono">{row.displayName}</td>
+                    <tr key={item.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(item.id)}
+                          disabled={processing}
+                          onChange={() => toggleSelect(item.id)}
+                          aria-label={`Select ${item.displayName}`}
+                        />
+                      </td>
+                      <td className="mono">{item.displayName}</td>
                       <td>
                         <span className={`badge ${b.className}`}>{b.label}</span>
                       </td>
@@ -410,8 +660,8 @@ export default function App() {
               ? `Downloading ${modelDownload.model}…`
               : overall
                 ? `Overall: ${overall.completed} / ${overall.total} done (MD)`
-                : paths.length
-                  ? `${paths.length} queued`
+                : items.length
+                  ? `${items.length} queued`
                   : "Empty"}
           </span>
           <div className="progress-track" title={modelDownload ? `Downloading model: ${modelDownload.pct}%` : "Overall progress"}>
@@ -451,12 +701,86 @@ export default function App() {
         </footer>
       </main>
 
+      {podcastOpen ? (
+        <div className="drawer-overlay about-overlay" role="presentation" onMouseDown={() => setPodcastOpen(false)}>
+          <div className="modal-dialog" onMouseDown={(ev) => ev.stopPropagation()}>
+            <div className="drawer-header">
+              <strong>Add podcast episodes</strong>
+              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={() => setPodcastOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="drawer-body">
+              <div>
+                <label className="field-label" htmlFor="feedUrl">
+                  RSS feed URL
+                </label>
+                <input
+                  id="feedUrl"
+                  className="input"
+                  placeholder="https://example.com/feed.xml"
+                  value={feedUrl}
+                  onChange={(e) => setFeedUrl(e.target.value)}
+                  disabled={feedBusy}
+                />
+              </div>
+              <div>
+                <label className="field-label">Output folder for episode Markdown</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    className="input"
+                    style={{ flex: 1 }}
+                    placeholder="Choose a folder…"
+                    value={podcastDir}
+                    onChange={(e) => setPodcastDir(e.target.value)}
+                    disabled={feedBusy}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={choosePodcastDir}
+                    disabled={feedBusy}
+                    style={{ flexShrink: 0 }}
+                  >
+                    <FolderOpen size={16} aria-hidden />
+                    <span>Choose…</span>
+                  </button>
+                </div>
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--muted)" }}>
+                  Episodes are downloaded temporarily for transcription and deleted afterwards; only the
+                  Markdown file is kept here.
+                </p>
+              </div>
+              {podcastError ? (
+                <p style={{ margin: 0, fontSize: 12, color: "var(--status-error)" }}>{podcastError}</p>
+              ) : null}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button type="button" className="btn-secondary" onClick={() => setPodcastOpen(false)} disabled={feedBusy}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={feedBusy || !feedUrl.trim() || !podcastDir.trim()}
+                  onClick={addPodcast}
+                >
+                  {feedBusy ? (
+                    <Loader2 size={14} className="icon" style={{ animation: "spin 1s linear infinite" }} />
+                  ) : null}
+                  {feedBusy ? " Loading…" : "Add episodes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {settingsOpen ? (
-        <div className="drawer-overlay" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
+        <div className="drawer-overlay" role="presentation" onMouseDown={closeSettings}>
           <aside className="drawer" onMouseDown={(ev) => ev.stopPropagation()}>
             <div className="drawer-header">
               <strong>Settings</strong>
-              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={() => setSettingsOpen(false)}>
+              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={closeSettings}>
                 <X size={18} />
               </button>
             </div>
@@ -465,6 +789,44 @@ export default function App() {
                 Settings are stored locally. API keys never leave this device.
               </p>
 
+              <div>
+                <label className="field-label">Markdown output</label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={config.includeMeta}
+                    onChange={(e) => setConfig({ ...config, includeMeta: e.target.checked })}
+                  />
+                  <span>Metadata block (file / podcast episode info)</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={config.includeSummary}
+                    onChange={(e) => setConfig({ ...config, includeSummary: e.target.checked })}
+                  />
+                  <span>Summary (LLM)</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={config.includeTranscript}
+                    onChange={(e) => setConfig({ ...config, includeTranscript: e.target.checked })}
+                  />
+                  <span>Transcript</span>
+                </label>
+                {outputInvalid ? (
+                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--status-error)" }}>
+                    {config.includeSummary
+                      ? "Summary requires an API key — enter one below or enable the transcript."
+                      : "Enable at least Summary or Transcript — otherwise the output would be empty."}
+                  </p>
+                ) : !config.includeSummary ? (
+                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--muted)" }}>
+                    Without the summary, no LLM API access is needed.
+                  </p>
+                ) : null}
+              </div>
               <div>
                 <label className="field-label" htmlFor="apiKey">
                   API key
@@ -475,8 +837,14 @@ export default function App() {
                   type="password"
                   autoComplete="off"
                   value={config.apiKey}
+                  disabled={!config.includeSummary}
                   onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
                 />
+                {config.includeSummary && !hasApiKey ? (
+                  <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--status-warn)" }}>
+                    No API key — the summary will be skipped.
+                  </p>
+                ) : null}
               </div>
               <div>
                 <label className="field-label" htmlFor="apiBase">
@@ -486,6 +854,7 @@ export default function App() {
                   id="apiBase"
                   className="input"
                   value={config.apiBaseUrl}
+                  disabled={!config.includeSummary}
                   onChange={(e) => setConfig({ ...config, apiBaseUrl: e.target.value })}
                 />
               </div>
@@ -497,61 +866,8 @@ export default function App() {
                   id="model"
                   className="input"
                   value={config.apiModel}
+                  disabled={!config.includeSummary}
                   onChange={(e) => setConfig({ ...config, apiModel: e.target.value })}
-                />
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div>
-                  <label className="field-label" htmlFor="temp">
-                    Temperature
-                  </label>
-                  <input
-                    id="temp"
-                    className="input"
-                    type="number"
-                    step="0.1"
-                    value={config.temperature}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (Number.isFinite(v)) {
-                        setConfig({ ...config, temperature: Math.min(Math.max(v, 0), 2) });
-                      }
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="field-label" htmlFor="mtok">
-                    Max tokens
-                  </label>
-                  <input
-                    id="mtok"
-                    className="input"
-                    type="number"
-                    value={config.maxTokens}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (Number.isFinite(v) && v >= 1) {
-                        setConfig({ ...config, maxTokens: Math.min(Math.floor(v), 131_072) });
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="field-label" htmlFor="chunks">
-                  Transcript chunk (characters)
-                </label>
-                <input
-                  id="chunks"
-                  className="input"
-                  type="number"
-                  value={config.transcriptChunkChars}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v) && v >= 256) {
-                      setConfig({ ...config, transcriptChunkChars: Math.floor(v) });
-                    }
-                  }}
                 />
               </div>
               <div>
@@ -611,30 +927,6 @@ export default function App() {
                     onChange={(e) => setConfig({ ...config, whisperModel: e.target.value })}
                   />
                 )}
-              </div>
-              <div>
-                <label className="field-label" htmlFor="wthreads">
-                  Whisper CPU threads (empty = auto)
-                </label>
-                <input
-                  id="wthreads"
-                  className="input"
-                  type="number"
-                  placeholder="auto"
-                  value={config.whisperThreads ?? ""}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      whisperThreads:
-                        e.target.value === ""
-                          ? null
-                          : (() => {
-                              const v = Number(e.target.value);
-                              return Number.isInteger(v) && v >= 1 ? v : config.whisperThreads;
-                            })(),
-                    })
-                  }
-                />
               </div>
               <div>
                 <label className="field-label" htmlFor="lang">
@@ -712,17 +1004,29 @@ export default function App() {
                       : "Checking Vulkan…"}
                 </span>
               </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={config.deleteSourceAfterSuccess}
-                  onChange={(e) => setConfig({ ...config, deleteSourceAfterSuccess: e.target.checked })}
-                />
-                <span>Delete source audio after successful MD export</span>
-              </label>
+              {saveError ? (
+                <p style={{ margin: 0, fontSize: 12, color: "var(--status-error)" }}>{saveError}</p>
+              ) : null}
               <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-                <button type="button" className="btn-primary" disabled={!storeReady} onClick={() => saveConfig(config)}>
-                  Save
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={!storeReady || outputInvalid || saveState !== "idle"}
+                  onClick={handleSaveSettings}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                >
+                  {saveState === "saved" ? (
+                    <>
+                      <Check size={15} aria-hidden /> Saved
+                    </>
+                  ) : saveState === "saving" ? (
+                    <>
+                      <Loader2 size={14} className="icon" style={{ animation: "spin 1s linear infinite" }} aria-hidden />{" "}
+                      Saving…
+                    </>
+                  ) : (
+                    "Save"
+                  )}
                 </button>
                 <button type="button" className="btn-secondary" onClick={() => setConfig(defaultConfig())}>
                   Reset defaults

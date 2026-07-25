@@ -65,16 +65,19 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
 
     let src = MediaSourceStream::new(Box::new(file), Default::default());
     let mss = symphonia::default::get_probe()
-        .format(&hint, src, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            src,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| e.to_string())?;
 
     let mut format = mss.format;
     let track = format
         .tracks()
         .iter()
-        .find(|t| {
-            t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some()
-        })
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some())
         .ok_or_else(|| "No usable audio track".to_string())?;
     let sample_rate = track
         .codec_params
