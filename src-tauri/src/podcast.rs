@@ -214,11 +214,10 @@ async fn download_to_file(
     let total = resp.content_length().unwrap_or(0);
     let tmp_path = dest.with_extension(format!(
         "{}.part",
-        dest.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("bin")
+        dest.extension().and_then(|e| e.to_str()).unwrap_or("bin")
     ));
-    let mut file = std::fs::File::create(&tmp_path).map_err(|e| format!("Create download file: {e}"))?;
+    let mut file =
+        std::fs::File::create(&tmp_path).map_err(|e| format!("Create download file: {e}"))?;
 
     let mut downloaded = 0u64;
     let mut stream = resp.bytes_stream();

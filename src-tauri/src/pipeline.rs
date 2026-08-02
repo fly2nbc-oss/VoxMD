@@ -9,7 +9,9 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 use crate::audio::decode_file_to_mono_16k;
 use crate::config::AppConfig;
 use crate::llm::{self, make_client};
-use crate::meta::{get_audio_metadata, get_audio_path_for_episode, get_md_path, get_md_path_for_episode};
+use crate::meta::{
+    get_audio_metadata, get_audio_path_for_episode, get_md_path, get_md_path_for_episode,
+};
 use crate::model_download;
 use crate::podcast::{self, QueueItem};
 
