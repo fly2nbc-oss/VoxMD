@@ -77,13 +77,47 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
-      # The release binaries are built with `gpu-vulkan`, but nothing used to
-      # compile or test that configuration before the (much slower) build jobs,
-      # so a break in vulkan_runtime.rs or the loader stub surfaced late.
-      - name: Rust clippy & tests (gpu-vulkan)
+  # Kept separate from `check` so the cheap feedback (eslint, tsc, fmt, clippy,
+  # tests) still returns in a couple of minutes: compiling whisper.cpp with
+  # Vulkan takes far longer than everything else here combined.
+  vulkan:
+    name: Vulkan feature checks (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VULKAN_SDK: /usr
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: vulkan
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            libvulkan-dev \
+            vulkan-tools \
+            glslc
+
+      # Releases are built with this feature, but nothing used to compile or test
+      # it before the (much slower) platform builds, so a break in the Vulkan
+      # runtime probe or the loader stub surfaced late.
+      - name: Clippy & tests (gpu-vulkan)
         working-directory: src-tauri
-        env:
-          VULKAN_SDK: /usr
         run: |
           cargo clippy --all-targets --locked --features gpu-vulkan -- -D warnings
           cargo test --locked --features gpu-vulkan
@@ -92,8 +126,6 @@ jobs:
       # app. If libvulkan ends up in DT_NEEDED that guarantee is silently gone.
       - name: Verify Vulkan loader is not a hard link-time dependency
         working-directory: src-tauri
-        env:
-          VULKAN_SDK: /usr
         run: |
           set -euo pipefail
           cargo build --locked --features gpu-vulkan --lib
@@ -128,7 +160,7 @@ jobs:
         run: cargo audit
 
   build:
-    needs: check
+    needs: [check, vulkan]
     strategy:
       fail-fast: false
       matrix:

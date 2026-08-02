@@ -304,27 +304,30 @@ jobs:
           $out | Sort-Object | Set-Content $env:OUT
           Get-Content $env:OUT
 
+      # `gh` is used rather than a tag-based upload action: a draft release is not
+      # returned by GET /releases/tags/{tag}, so an action that resolves by tag
+      # would create a *second* draft instead of adding to this one. `gh` falls
+      # back to listing releases and so finds the draft.
       - name: Attach checksums (Linux)
         if: matrix.platform == 'ubuntu-24.04'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: true
-          files: SHA256SUMS-${{ matrix.sha_suffix }}.txt
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" --clobber \
+            "SHA256SUMS-${{ matrix.sha_suffix }}.txt"
 
       - name: Attach checksums + portable EXE (Windows)
         if: matrix.platform == 'windows-latest'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: true
-          files: |
-            SHA256SUMS-${{ matrix.sha_suffix }}.txt
-            portable-dist/VoxMD.exe
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" --clobber \
+            "SHA256SUMS-${{ matrix.sha_suffix }}.txt" \
+            "portable-dist/VoxMD.exe"
 
   # Only flip the release live once every platform actually produced artifacts.
   publish:

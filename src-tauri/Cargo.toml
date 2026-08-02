@@ -1,7 +1,7 @@
 [package]
 name = "voxmd"
 version = "1.0.3"
-description = "VoxMD – lokales Audio-Transkript mit Whisper (Vulkan) und LLM"
+description = "Transcribe audio and podcast episodes to Markdown with local Whisper and an LLM summary"
 authors = ["VoxMD contributors"]
 license = "Apache-2.0"
 edition = "2021"

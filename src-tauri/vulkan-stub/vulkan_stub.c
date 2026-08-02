@@ -14,6 +14,11 @@
  * safe failure codes so ggml's try/catch in ggml_backend_vk_reg() can fall back.
  */
 
+/* Must precede every libc header to have any effect. */
+#if !defined(_WIN32)
+#define _GNU_SOURCE
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -22,8 +27,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
-#define _GNU_SOURCE
 #include <dlfcn.h>
+#include <pthread.h>
 #endif
 
 typedef void (*PFN_vkVoidFunction)(void);
@@ -51,7 +56,6 @@ typedef struct VkPhysicalDeviceFeatures2 {
 
 static void *real_lib;
 static PFN_vkGetInstanceProcAddr real_get;
-static int load_attempted;
 
 #if defined(_WIN32)
 static void *stub_dlsym(void *lib, const char *name) {
@@ -63,14 +67,15 @@ static void *stub_dlsym(void *lib, const char *name) {
 }
 #endif
 
-static void load_real(void) {
-    if (load_attempted) {
-        return;
-    }
-    load_attempted = 1;
-
+static void load_real_once(void) {
 #if defined(_WIN32)
-    real_lib = (void *)LoadLibraryA("vulkan-1.dll");
+    /*
+     * System32 only. The default search order includes the directory of the
+     * running executable, and we ship a portable VoxMD.exe that users drop into
+     * places like Downloads — a vulkan-1.dll sitting next to it would otherwise
+     * be loaded into the process.
+     */
+    real_lib = (void *)LoadLibraryExA("vulkan-1.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
 #else
     /* Absolute paths only — avoid picking up a same-named shim via DT_NEEDED. */
     static const char *const candidates[] = {
@@ -98,6 +103,33 @@ static void load_real(void) {
         real_get = (PFN_vkGetInstanceProcAddr)stub_dlsym(real_lib, "vkGetInstanceProcAddr");
     }
 }
+
+/*
+ * ggml-vulkan calls into these entry points from several threads. The guard used
+ * to be a plain `static int`, so two threads could both run the loader and race
+ * on `real_lib` / `real_get`.
+ */
+#if defined(_WIN32)
+static INIT_ONCE load_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK load_real_cb(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+    (void)once;
+    (void)param;
+    (void)ctx;
+    load_real_once();
+    return TRUE;
+}
+
+static void load_real(void) {
+    InitOnceExecuteOnce(&load_once, load_real_cb, NULL, NULL);
+}
+#else
+static pthread_once_t load_once = PTHREAD_ONCE_INIT;
+
+static void load_real(void) {
+    pthread_once(&load_once, load_real_once);
+}
+#endif
 
 static VkResult stub_enumerate_instance_version(uint32_t *api_version) {
     (void)api_version;

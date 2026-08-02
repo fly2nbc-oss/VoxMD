@@ -11,11 +11,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ### Security
 
+- **The Windows Vulkan stub loaded `vulkan-1.dll` using the default search order**, which includes the directory of the running executable. Since releases ship a portable `VoxMD.exe` that users typically drop into a folder like Downloads, a `vulkan-1.dll` placed alongside it would have been loaded into the process. It is now resolved from System32 only.
 - **Updated `feed-rs` to 2.4, pulling in `quick-xml` 0.41.** The previous version was affected by RUSTSEC-2026-0194 and RUSTSEC-2026-0195 (both rated 7.5): quadratic parsing time on duplicate attribute names, and unbounded allocation for namespace declarations leading to memory exhaustion. VoxMD parses podcast feeds fetched from arbitrary URLs, so this code path handles untrusted input directly.
 - Updated `quinn-proto` to 0.11.16 for RUSTSEC-2026-0185 (remote memory exhaustion), and `plist`/`tauri-build` to drop a second affected `quick-xml` copy from the build dependencies. `cargo audit` now reports no vulnerabilities.
 
 ### Fixed
 
+- **The Vulkan stub's one-time loader init was unsynchronised.** It used a plain `static int` guard while ggml-vulkan calls in from several threads, so two threads could run the loader concurrently and race on the resolved handles. It now uses `pthread_once` / `InitOnceExecuteOnce`.
+- `_GNU_SOURCE` was defined after a libc header in the stub, which made it a no-op.
 - **A tag could publish code that was never tested.** The release workflow had no dependency on the lint and test job, so pushing `v*` went straight to building and publishing.
 - **The two build jobs raced to create the same GitHub release**, and the checksum files were attached by tag while the bundles were attached by the release the action happened to create — they could land on different releases. The release is now created once as a draft, both platforms upload into it, and it is only published after every platform has produced artifacts.
 - **A tag whose number disagreed with the manifests was accepted.** The release now fails immediately unless the tag matches `tauri.conf.json`, `package.json` and `Cargo.toml`.
@@ -37,6 +40,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - All jobs have explicit timeouts. The Windows build compiles whisper.cpp single-threaded, so a hang previously ran until the six-hour default.
 - CI declares read-only permissions; only the release jobs that need to write do so.
 - Removed the signing secrets from the CI build job. Nothing consumes them — there is no updater plugin configured — so they were exposed on every pull-request build for no benefit.
+- Package metadata and the window capability description are in English, matching the rest of the project. The crate description in particular ends up in `.deb` and installer metadata.
+
+### Removed
+
+- The unused Vite/Tauri template favicons in `public/`. The 0.9.8 entry below claims these were deleted, but they were still present and shipped in every build.
 
 ## [1.0.2] - 2026-08-03
 
