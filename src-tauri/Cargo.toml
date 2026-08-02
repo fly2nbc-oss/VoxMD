@@ -1,6 +1,6 @@
 [package]
 name = "voxmd"
-version = "0.10.0"
+version = "1.0.0"
 description = "VoxMD – lokales Audio-Transkript mit Whisper (Vulkan) und LLM"
 authors = ["VoxMD contributors"]
 license = "Apache-2.0"
@@ -11,12 +11,14 @@ name = "voxmd_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-# GPU: `cargo tauri build --features gpu-vulkan` (Vulkan SDK / Loader auf dem System nötig)
+# GPU: `cargo tauri build --features gpu-vulkan` (Vulkan SDK/headers at build time).
+# The Vulkan *loader* is opened at runtime via a stub — missing libvulkan.so does not block startup.
 default = []
 gpu-vulkan = ["whisper-rs/vulkan"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -32,7 +34,6 @@ lofty = "0.22"
 symphonia = { version = "0.5.4", features = ["all"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 feed-rs = "2"
-tempfile = "3"
 futures = "0.3"
 dirs = "6"
 sys-locale = "0.3"

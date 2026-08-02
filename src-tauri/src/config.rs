@@ -11,16 +11,17 @@ pub struct AppConfig {
     /// Aliases: whisperModelPath (old store key) → whisperModel.
     #[serde(alias = "whisperModelPath")]
     pub whisper_model: String,
+    /// Transcription language: `"auto"` for Whisper detection, or ISO 639-1 (e.g. `de`).
     #[serde(default = "default_language")]
     pub language: String,
     /// Summary language: `"system"` or ISO 639-1 code (e.g. `de`, `en`).
     #[serde(default = "default_summary_language")]
     pub summary_language: String,
-    /// Use GPU (only effective when built with feature `gpu-vulkan`)
+    /// Use GPU when the binary was built with `gpu-vulkan` and the Vulkan loader is present at runtime.
     #[serde(default = "default_true")]
     pub use_gpu: bool,
-    /// Only applies to local files; podcast episode downloads are always temporary.
-    #[serde(default = "default_true")]
+    /// After a successful export, delete the audio file only (never the Markdown).
+    #[serde(default)]
     pub delete_source_after_success: bool,
     /// Write a metadata block (episode/file info) at the top of the Markdown output.
     #[serde(default = "default_true")]
@@ -41,7 +42,7 @@ fn default_true() -> bool {
 }
 
 fn default_language() -> String {
-    "de".to_string()
+    "auto".to_string()
 }
 
 fn default_summary_language() -> String {
@@ -87,7 +88,7 @@ impl Default for AppConfig {
             language: default_language(),
             summary_language: default_summary_language(),
             use_gpu: default_true(),
-            delete_source_after_success: true,
+            delete_source_after_success: false,
             include_meta: true,
             include_summary: true,
             include_transcript: true,
@@ -118,10 +119,10 @@ impl AppConfig {
         if !self.summary_enabled() && !self.include_transcript {
             return Err(if self.include_summary {
                 "No API key: the summary is skipped and the transcript is disabled — the output \
-                 would be empty. Enter an API key or enable the transcript (Settings)."
+                 would be empty. Enter an API key or enable the transcript (toolbar)."
                     .to_string()
             } else {
-                "Markdown output is empty: enable at least Summary or Transcript (Settings)."
+                "Markdown output is empty: enable at least Summary or Transcript (toolbar)."
                     .to_string()
             });
         }

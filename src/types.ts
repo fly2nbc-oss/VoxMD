@@ -4,11 +4,12 @@ export interface AppConfig {
   apiModel: string;
   /** Model name ("turbo", "large-v3", …) or absolute path to local .bin/.gguf file */
   whisperModel: string;
+  /** `"auto"` for Whisper language detection, or ISO 639-1 code (e.g. `de`). */
   language: string;
   /** `"system"` or ISO 639-1 code for LLM summary output */
   summaryLanguage: string;
   useGpu: boolean;
-  /** Only applies to local files; podcast downloads are always temporary. */
+  /** After a successful export, delete the audio file only — never the Markdown. */
   deleteSourceAfterSuccess: boolean;
   /** Markdown output: metadata block (episode/file info) at the top. */
   includeMeta: boolean;
@@ -18,6 +19,16 @@ export interface AppConfig {
   includeTranscript: boolean;
   /** Last used output folder for podcast episode Markdown files. */
   podcastOutputDir: string;
+  /** Recently used podcast feed URL + output directory pairs (UI only). */
+  podcastRecents: PodcastRecent[];
+}
+
+/** One entry in the podcast-dialog recent list. */
+export interface PodcastRecent {
+  feedUrl: string;
+  outputDir: string;
+  /** Feed title from the last successful load, if known. */
+  feedTitle?: string;
 }
 
 export interface EpisodeMeta {

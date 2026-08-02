@@ -159,7 +159,7 @@ fn has_audio_extension(path: &str) -> bool {
 }
 
 /// File extension hint for the temp download (Symphonia probes content, but a hint helps).
-fn url_extension(url: &str) -> String {
+pub fn url_extension(url: &str) -> String {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let ext = Path::new(path)
         .extension()
@@ -173,23 +173,29 @@ fn url_extension(url: &str) -> String {
     }
 }
 
-/// Download an episode into a self-deleting temp file.
+/// Download an episode into `dest` (creates/overwrites the file).
 ///
 /// Sync wrapper for the blocking Whisper task; must be called from a thread with a
 /// Tokio runtime context (e.g. inside `spawn_blocking`).
-pub fn download_to_temp_blocking(
+pub fn download_to_file_blocking(
     url: &str,
+    dest: &Path,
     on_progress: impl Fn(u64, u64),
-) -> Result<tempfile::NamedTempFile, String> {
+) -> Result<(), String> {
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|_| "No async runtime available for episode download.".to_string())?;
-    handle.block_on(download_to_temp(url, on_progress))
+    handle.block_on(download_to_file(url, dest, on_progress))
 }
 
-async fn download_to_temp(
+async fn download_to_file(
     url: &str,
+    dest: &Path,
     on_progress: impl Fn(u64, u64),
-) -> Result<tempfile::NamedTempFile, String> {
+) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Create output folder: {e}"))?;
+    }
+
     let client = reqwest::Client::builder()
         .user_agent("VoxMD")
         .connect_timeout(Duration::from_secs(30))
@@ -206,27 +212,32 @@ async fn download_to_temp(
     }
 
     let total = resp.content_length().unwrap_or(0);
-    let mut tmp = tempfile::Builder::new()
-        .prefix("voxmd-episode-")
-        .suffix(&format!(".{}", url_extension(url)))
-        .tempfile()
-        .map_err(|e| format!("Create temp file: {e}"))?;
+    let tmp_path = dest.with_extension(format!(
+        "{}.part",
+        dest.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin")
+    ));
+    let mut file = std::fs::File::create(&tmp_path).map_err(|e| format!("Create download file: {e}"))?;
 
     let mut downloaded = 0u64;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("Episode download stream: {e}"))?;
-        tmp.as_file_mut()
-            .write_all(&chunk)
-            .map_err(|e| format!("Write temp file: {e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Write download file: {e}"))?;
         downloaded += chunk.len() as u64;
         on_progress(downloaded, total);
     }
-    tmp.as_file_mut()
-        .flush()
-        .map_err(|e| format!("Flush temp file: {e}"))?;
+    file.flush()
+        .map_err(|e| format!("Flush download file: {e}"))?;
+    drop(file);
 
-    Ok(tmp)
+    std::fs::rename(&tmp_path, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Finalize download: {e}")
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]

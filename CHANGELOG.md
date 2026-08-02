@@ -7,21 +7,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-06-12
+## [1.0.0] - 2026-08-02
 
 ### Added
 
-- **Podcast feeds**: new toolbar button loads an RSS/Atom feed (`feed-rs`) and queues all episodes with audio enclosures. Episodes are downloaded lazily into a self-deleting temp file during the Whisper stage; the Markdown lands in a per-feed output folder chosen in the dialog (last folder remembered).
-- **Queue selection**: checkbox column with select-all and a **Remove** toolbar button to drop marked entries from the list.
-- **Markdown output toggles** in Settings: metadata block (file / episode info), LLM summary, and transcript can be enabled independently (at least one of summary/transcript required). With the summary disabled, no API key is needed.
+- **Podcast feeds**: toolbar button loads an RSS/Atom feed (`feed-rs`) and queues all episodes with audio enclosures. On Start, audio is downloaded into the chosen output folder (same stem as the Markdown); both files stay there unless the delete-audio toggle is on.
+- **Recent podcast feeds** in the podcast dialog (feed URL + output folder, up to 10); click to reuse, trash icon to remove.
+- **Queue selection**: checkbox column with select-all and a **Remove** toolbar button. **Start** processes only the selected entries when any are checked (otherwise the full queue).
+- **Markdown output toggles** in the toolbar: metadata, summary, and transcript (at least one of summary/transcript required). With the summary disabled, no API key is needed.
+- **Appearance**: Light / Dark / System theme in Settings (persisted locally).
+- **Transcription language**: Auto-detect or ISO code (same pattern as summary language); default `auto`.
+- **Whisper Custom path…**: browse or paste an absolute path to a local `.bin` / `.gguf` model.
 - **Drag & drop**: audio files dropped anywhere in the window are added to the queue (same formats as the file picker; unsupported items are ignored with a note).
 - New job stage **Download** with percentage progress for podcast episodes.
+- Vulkan builds load the Vulkan library at runtime via a stub — missing `libvulkan.so` no longer prevents startup (CPU fallback); `vulkan_status` reports runtime availability.
 - `SECURITY.md`, Dependabot config (GitHub Actions, Cargo, npm — weekly, grouped).
 
 ### Changed
 
 - **Summary requires an API key**: without one it is skipped silently instead of failing the run (`AppConfig::summary_enabled`); the API fields in Settings are greyed out while the summary is disabled.
-- **Delete source after success** moved from Settings into the toolbar as a trash-icon toggle (persists immediately; red = active). It only applies to local files — episode downloads are always temporary.
+- **Delete audio after success** (trash icon in the toolbar): deletes **audio only** after a successful Markdown export (local files and podcast downloads). **Markdown is never deleted.** Default is off (keep audio).
+- Theme moved into Settings (**Appearance**); **About** remains a toolbar info icon (separate dialog).
+- Settings reorganized into **Summary (LLM)** / **Transcription (Whisper)** / **Appearance** with clearer field explanations.
 - Settings **Save** now shows a confirmation state and closes the panel; errors keep it open.
 - **Files** and **Podcast** now append to the queue (deduplicated) instead of replacing it.
 - Summary prompt rewritten: no speaker labels, quotes cite `[HH:MM:SS]` timestamps, sections are omitted when empty, episode metadata is passed as context, fixed sampling (temperature 0.3).

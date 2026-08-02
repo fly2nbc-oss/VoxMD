@@ -68,16 +68,36 @@ pub fn get_md_path(audio_path: &Path, title: &str, year: &Option<String>) -> Pat
 
 /// Markdown output path for a podcast episode: `{output_dir}/{YYYY - title}.md`.
 pub fn get_md_path_for_episode(output_dir: &Path, title: &str, date: &Option<String>) -> PathBuf {
+    output_dir.join(md_file_name(&episode_stem(title, date)))
+}
+
+/// Local audio path for a downloaded podcast episode: `{output_dir}/{YYYY - title}.{ext}`.
+pub fn get_audio_path_for_episode(
+    output_dir: &Path,
+    title: &str,
+    date: &Option<String>,
+    ext: &str,
+) -> PathBuf {
+    let stem = episode_stem(title, date);
+    let mut name = sanitize_filename(&stem);
+    if name.is_empty() {
+        name = "episode".to_string();
+    }
+    let ext = ext.trim().trim_start_matches('.').to_lowercase();
+    let ext = if ext.is_empty() { "mp3" } else { &ext };
+    output_dir.join(format!("{name}.{ext}"))
+}
+
+fn episode_stem(title: &str, date: &Option<String>) -> String {
     let year = date
         .as_deref()
         .and_then(|d| d.get(..4))
         .filter(|y| y.chars().all(|c| c.is_ascii_digit()));
-    let stem = match year {
+    match year {
         Some(y) if !title.trim().is_empty() => format!("{y} - {title}"),
         _ if !title.trim().is_empty() => title.to_string(),
         _ => "episode".to_string(),
-    };
-    output_dir.join(md_file_name(&stem))
+    }
 }
 
 /// Appends `.md` explicitly — `Path::with_extension` would truncate titles containing dots.

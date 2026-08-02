@@ -9,7 +9,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 use crate::audio::decode_file_to_mono_16k;
 use crate::config::AppConfig;
 use crate::llm::{self, make_client};
-use crate::meta::{get_audio_metadata, get_md_path, get_md_path_for_episode};
+use crate::meta::{get_audio_metadata, get_audio_path_for_episode, get_md_path, get_md_path_for_episode};
 use crate::model_download;
 use crate::podcast::{self, QueueItem};
 
@@ -87,7 +87,9 @@ fn transcribe_one(
 
     let mut state = ctx.create_state().map_err(|e| e.to_string())?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some(&cfg.language));
+    let lang = cfg.language.trim();
+    let lang = if lang.is_empty() { "auto" } else { lang };
+    params.set_language(Some(lang));
     params.set_n_threads(whisper_threads() as i32);
     state
         .full(params, &samples)
@@ -101,6 +103,8 @@ fn transcribe_one(
 struct WorkItem {
     item: QueueItem,
     md_path: PathBuf,
+    /// Local audio file used for Whisper (and optional deletion after success).
+    local_audio: PathBuf,
     title: String,
     /// Tag year for local files; podcast items carry the date in `episode`.
     year: Option<String>,
@@ -119,9 +123,16 @@ fn prepare_work_item(item: &QueueItem) -> Result<WorkItem, String> {
             ));
         }
         let md_path = get_md_path_for_episode(&out_dir, &ep.title, &ep.date);
+        let local_audio = get_audio_path_for_episode(
+            &out_dir,
+            &ep.title,
+            &ep.date,
+            &podcast::url_extension(&item.source),
+        );
         Ok(WorkItem {
             item: item.clone(),
             md_path,
+            local_audio,
             title: ep.title,
             year: None,
         })
@@ -132,6 +143,7 @@ fn prepare_work_item(item: &QueueItem) -> Result<WorkItem, String> {
         Ok(WorkItem {
             item: item.clone(),
             md_path,
+            local_audio: path,
             title,
             year,
         })
@@ -247,12 +259,16 @@ async fn llm_stage(
         return;
     }
 
-    // Source deletion only applies to local files; episode temp downloads are
-    // removed right after transcription.
-    let deletion_note = if cfg.delete_source_after_success && !job.work.item.is_podcast() {
-        match std::fs::remove_file(Path::new(&job.work.item.source)) {
-            Ok(()) => String::new(),
-            Err(e) => format!(" (source deletion failed: {e})"),
+    // Optional: delete audio only. Markdown was just written and is never removed.
+    let deletion_note = if cfg.delete_source_after_success {
+        let audio = &job.work.local_audio;
+        if audio == md_path {
+            String::new()
+        } else {
+            match std::fs::remove_file(audio) {
+                Ok(()) => String::new(),
+                Err(e) => format!(" (audio deletion failed: {e})"),
+            }
         }
     } else {
         String::new()
@@ -391,7 +407,7 @@ pub async fn run_batch(
     let done_w = done_counter.clone();
     let whisper_task = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let ctx_params = WhisperContextParameters {
-            use_gpu: cfg!(feature = "gpu-vulkan") && cfg_w.use_gpu,
+            use_gpu: crate::vulkan_runtime::gpu_usable() && cfg_w.use_gpu,
             ..Default::default()
         };
 
@@ -412,46 +428,50 @@ pub async fn run_batch(
             let id = wi.item.id.clone();
             let display_name = wi.item.display_name.clone();
 
-            // Podcast episodes: download to a self-deleting temp file first.
-            let mut temp_audio: Option<tempfile::NamedTempFile> = None;
+            // Podcast episodes: download into the chosen output folder (same stem as the .md).
             let audio_path: PathBuf = if wi.item.is_podcast() {
-                let mut p = payload(&id, &display_name, "download");
-                p.download_pct = Some(0);
-                p.overall = Some(overall_snapshot(&done_w, total));
-                emit_job(&app_w, p);
+                if wi.local_audio.exists() {
+                    wi.local_audio.clone()
+                } else {
+                    let mut p = payload(&id, &display_name, "download");
+                    p.download_pct = Some(0);
+                    p.overall = Some(overall_snapshot(&done_w, total));
+                    emit_job(&app_w, p);
 
-                let app_p = app_w.clone();
-                let id_p = id.clone();
-                let disp_p = display_name.clone();
-                let last_pct = AtomicI32::new(-1);
-                let dl = podcast::download_to_temp_blocking(&wi.item.source, move |dl, total_b| {
-                    if total_b == 0 {
-                        return;
-                    }
-                    let pct = (dl * 100 / total_b) as i32;
-                    if last_pct.swap(pct, Ordering::Relaxed) == pct {
-                        return;
-                    }
-                    let mut p = payload(&id_p, &disp_p, "download");
-                    p.download_pct = Some(pct);
-                    emit_job(&app_p, p);
-                });
-                match dl {
-                    Ok(t) => {
-                        let path = t.path().to_path_buf();
-                        temp_audio = Some(t);
-                        path
-                    }
-                    Err(e) => {
-                        let mut p = payload(&id, &display_name, "error");
-                        p.overall = Some(overall_snapshot(&done_w, total));
-                        p.message = Some(e);
-                        emit_job(&app_w, p);
-                        continue;
+                    let app_p = app_w.clone();
+                    let id_p = id.clone();
+                    let disp_p = display_name.clone();
+                    let last_pct = AtomicI32::new(-1);
+                    let dest = wi.local_audio.clone();
+                    let dl = podcast::download_to_file_blocking(
+                        &wi.item.source,
+                        &dest,
+                        move |dl, total_b| {
+                            if total_b == 0 {
+                                return;
+                            }
+                            let pct = (dl * 100 / total_b) as i32;
+                            if last_pct.swap(pct, Ordering::Relaxed) == pct {
+                                return;
+                            }
+                            let mut p = payload(&id_p, &disp_p, "download");
+                            p.download_pct = Some(pct);
+                            emit_job(&app_p, p);
+                        },
+                    );
+                    match dl {
+                        Ok(()) => dest,
+                        Err(e) => {
+                            let mut p = payload(&id, &display_name, "error");
+                            p.overall = Some(overall_snapshot(&done_w, total));
+                            p.message = Some(e);
+                            emit_job(&app_w, p);
+                            continue;
+                        }
                     }
                 }
             } else {
-                PathBuf::from(&wi.item.source)
+                wi.local_audio.clone()
             };
 
             if cancel_requested() {
@@ -474,8 +494,6 @@ pub async fn run_batch(
                     continue;
                 }
             };
-            // Episode audio is no longer needed once transcribed.
-            drop(temp_audio);
 
             if raw.trim().is_empty() {
                 let mut p = payload(&id, &display_name, "error");

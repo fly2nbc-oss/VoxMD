@@ -67,7 +67,7 @@ Tagged releases (`v*`) use `.github/workflows/tauri-release.yml` with the **same
 
 ## Whisper Models
 
-Either configure a **preset name** (downloaded automatically on demand) or an absolute path to a local `.gguf` file in Settings.
+Either configure a **preset name** (downloaded automatically on demand) or choose **Custom path…** in Settings and pick / paste an absolute path to a local `.bin` / `.gguf` file.
 
 ## LLM Summary Stage
 
@@ -75,7 +75,7 @@ The transcript in the output is the **raw Whisper text** (`[HH:MM:SS] text` line
 
 ## Podcast Feeds
 
-`src-tauri/src/podcast.rs` parses RSS/Atom via `feed-rs` and only lists entries with an audio enclosure. Episodes are downloaded lazily into a self-deleting temp file inside the Whisper stage — the bounded-pipeline contract (one Whisper + one LLM job in flight) is unaffected.
+`src-tauri/src/podcast.rs` parses RSS/Atom via `feed-rs` and only lists entries with an audio enclosure. Episodes are downloaded lazily during the Whisper stage into the **user-chosen output folder** (same basename as the Markdown). The toolbar trash toggle can delete that audio after a successful export; the Markdown is always kept. The bounded-pipeline contract (one Whisper + one LLM job in flight) is unaffected.
 
 ## Code of Conduct
 

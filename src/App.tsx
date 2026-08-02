@@ -6,30 +6,48 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Store } from "@tauri-apps/plugin-store";
 import {
+  Captions,
   Check,
   CircleStop,
   FileAudio2,
+  FileText,
   FolderOpen,
   Info,
   ListX,
   Loader2,
-  Moon,
   Play,
   Rss,
   Settings,
-  Sun,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { defaultConfig } from "./defaults";
-import type { AppConfig, EpisodeInfo, QueueItem } from "./types";
+import type { AppConfig, EpisodeInfo, PodcastRecent, QueueItem } from "./types";
 import appIcon from "../src-tauri/icons/128x128.png";
 
 const STORE_FILE = "voxmd-settings.json";
 const CONFIG_KEY = "appConfig";
+const THEME_KEY = "voxmd-theme";
 
 const GITHUB_URL = "https://github.com/fly2nbc-oss/VoxMD";
+
+type ThemeMode = "light" | "dark" | "system";
+
+function readStoredTheme(): ThemeMode {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark" || saved === "system") return saved;
+  } catch {
+    /* ignore */
+  }
+  return "system";
+}
+
+function systemPrefersDark(): boolean {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
 
 const AUDIO_EXTENSIONS = ["mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus"];
 
@@ -66,6 +84,47 @@ function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppConfig {
     includeSummary: saved.includeSummary ?? base.includeSummary,
     includeTranscript: saved.includeTranscript ?? base.includeTranscript,
     podcastOutputDir: saved.podcastOutputDir ?? base.podcastOutputDir,
+    podcastRecents: normalizePodcastRecents(saved.podcastRecents),
+  };
+}
+
+const PODCAST_RECENTS_MAX = 10;
+
+function normalizePodcastRecents(raw: unknown): PodcastRecent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PodcastRecent[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const feedUrl = typeof (entry as PodcastRecent).feedUrl === "string" ? (entry as PodcastRecent).feedUrl.trim() : "";
+    const outputDir =
+      typeof (entry as PodcastRecent).outputDir === "string" ? (entry as PodcastRecent).outputDir.trim() : "";
+    if (!feedUrl || !outputDir || seen.has(feedUrl)) continue;
+    seen.add(feedUrl);
+    const feedTitle =
+      typeof (entry as PodcastRecent).feedTitle === "string" && (entry as PodcastRecent).feedTitle!.trim()
+        ? (entry as PodcastRecent).feedTitle!.trim()
+        : undefined;
+    out.push({ feedUrl, outputDir, feedTitle });
+    if (out.length >= PODCAST_RECENTS_MAX) break;
+  }
+  return out;
+}
+
+function rememberPodcastRecent(
+  config: AppConfig,
+  feedUrl: string,
+  outputDir: string,
+  feedTitle?: string,
+): AppConfig {
+  const url = feedUrl.trim();
+  const dir = outputDir.trim();
+  const title = feedTitle?.trim() || undefined;
+  const rest = config.podcastRecents.filter((r) => r.feedUrl !== url);
+  return {
+    ...config,
+    podcastOutputDir: dir,
+    podcastRecents: [{ feedUrl: url, outputDir: dir, feedTitle: title }, ...rest].slice(0, PODCAST_RECENTS_MAX),
   };
 }
 
@@ -75,6 +134,11 @@ function toMsg(e: unknown): string {
 
 function isSummarySystemLanguage(lang: string): boolean {
   return lang.trim().toLowerCase() === "system";
+}
+
+function isTranscriptionAuto(lang: string): boolean {
+  const t = lang.trim().toLowerCase();
+  return t === "auto" || t === "";
 }
 
 interface JobProgressPayload {
@@ -124,9 +188,7 @@ function detailsForRow(row: JobRow): string {
 }
 
 export default function App() {
-  const [theme, setTheme] = useState<"light" | "dark">(() =>
-    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
-  );
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readStoredTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [storeReady, setStoreReady] = useState(false);
@@ -156,17 +218,30 @@ export default function App() {
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (!aboutOpen) return;
-    void getVersion().then(setAboutVersion).catch(() => setAboutVersion("—"));
-  }, [aboutOpen]);
+    try {
+      localStorage.setItem(THEME_KEY, themeMode);
+    } catch {
+      /* ignore */
+    }
+    const apply = () => {
+      const resolved = themeMode === "system" ? (systemPrefersDark() ? "dark" : "light") : themeMode;
+      document.documentElement.setAttribute("data-theme", resolved);
+    };
+    apply();
+    if (themeMode !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => apply();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [themeMode]);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
-
-  useEffect(() => {
-    void invoke<{ builtWithVulkan: boolean }>("vulkan_status")
-      .then((status) => setVulkanAvailable(status.builtWithVulkan))
+    void invoke<{
+      builtWithVulkan: boolean;
+      loaderAvailable: boolean;
+      available: boolean;
+    }>("vulkan_status")
+      .then((status) => setVulkanAvailable(status.available))
       .catch(() => setVulkanAvailable(null));
   }, []);
 
@@ -199,6 +274,11 @@ export default function App() {
     }
     settingsWasOpen.current = settingsOpen;
   }, [settingsOpen, refreshModelInfos]);
+
+  useEffect(() => {
+    if (!aboutOpen) return;
+    void getVersion().then(setAboutVersion).catch(() => setAboutVersion("—"));
+  }, [aboutOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -372,8 +452,9 @@ export default function App() {
     setFeedBusy(true);
     setPodcastError("");
     try {
-      const episodes = await invoke<EpisodeInfo[]>("fetch_podcast_feed", { url: feedUrl.trim() });
-      const dir = podcastDir;
+      const url = feedUrl.trim();
+      const dir = podcastDir.trim();
+      const episodes = await invoke<EpisodeInfo[]>("fetch_podcast_feed", { url });
       addItems(
         episodes.map((ep) => ({
           id: ep.audioUrl,
@@ -391,14 +472,25 @@ export default function App() {
       );
       setPodcastOpen(false);
       setStatusMsg(`${episodes.length} episode(s) added.`);
-      if (dir !== config.podcastOutputDir) {
-        await saveConfig({ ...config, podcastOutputDir: dir });
-      }
+      await saveConfig(rememberPodcastRecent(config, url, dir, episodes[0]?.feedTitle));
     } catch (e) {
       setPodcastError(toMsg(e));
     } finally {
       setFeedBusy(false);
     }
+  };
+
+  const applyPodcastRecent = (recent: PodcastRecent) => {
+    setFeedUrl(recent.feedUrl);
+    setPodcastDir(recent.outputDir);
+    setPodcastError("");
+  };
+
+  const removePodcastRecent = (feedUrl: string) => {
+    void saveConfig({
+      ...config,
+      podcastRecents: config.podcastRecents.filter((r) => r.feedUrl !== feedUrl),
+    });
   };
 
   const toggleSelect = (id: string) => {
@@ -434,18 +526,24 @@ export default function App() {
       setStatusMsg("No entries in queue.");
       return;
     }
+    // Selection scopes the batch; with nothing checked, process the full queue.
+    const toProcess = selected.size > 0 ? items.filter((i) => selected.has(i.id)) : items;
+    if (!toProcess.length) {
+      setStatusMsg("No entries selected.");
+      return;
+    }
     try {
-      await invoke("start_transcription", { items, config });
+      await invoke("start_transcription", { items: toProcess, config });
       setProcessing(true);
       setSelected(new Set());
       setJobs(() => {
         const next: Record<string, JobRow> = {};
-        for (const item of items) {
+        for (const item of toProcess) {
           next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
         }
         return next;
       });
-      setOverall({ completed: 0, total: items.length });
+      setOverall({ completed: 0, total: toProcess.length });
     } catch (e) {
       setStatusMsg(toMsg(e));
     }
@@ -469,6 +567,22 @@ export default function App() {
   const hasApiKey = config.apiKey.trim() !== "";
   // Summary only runs with a key; without one, the transcript must carry the output.
   const outputInvalid = !(config.includeSummary && hasApiKey) && !config.includeTranscript;
+
+  const toggleMdOutput = (key: "includeMeta" | "includeSummary" | "includeTranscript") => {
+    const next = { ...config, [key]: !config[key] };
+    if (key !== "includeMeta") {
+      const summaryWouldRun = next.includeSummary && next.apiKey.trim() !== "";
+      if (!summaryWouldRun && !next.includeTranscript) {
+        setStatusMsg(
+          next.includeSummary
+            ? "Need an API key or Transcript — otherwise the Markdown would be empty."
+            : "Enable at least Summary or Transcript — otherwise the Markdown would be empty.",
+        );
+        return;
+      }
+    }
+    void saveConfig(next);
+  };
 
   const handleSaveSettings = async () => {
     setSaveState("saving");
@@ -524,12 +638,18 @@ export default function App() {
           <button
             type="button"
             className="btn-primary btn-sm"
-            disabled={processing || !items.length}
+            disabled={processing || !items.length || outputInvalid}
             onClick={start}
-            title="Start processing"
+            title={
+              outputInvalid
+                ? "Enable Transcript or Summary (with API key) in the toolbar"
+                : selected.size > 0
+                  ? `Start processing ${selected.size} selected entr${selected.size === 1 ? "y" : "ies"}`
+                  : "Start processing all entries in the queue"
+            }
           >
             <Play size={18} aria-hidden />
-            <span>Start</span>
+            <span>Start{selected.size > 0 ? ` (${selected.size})` : ""}</span>
           </button>
           {processing ? (
             <button
@@ -546,13 +666,60 @@ export default function App() {
         <div className="app-bar-end">
           <button
             type="button"
+            className={`icon-btn${config.includeMeta ? " icon-btn-toggle-on" : ""}`}
+            title={
+              config.includeMeta
+                ? "Metadata block on — click to omit from Markdown"
+                : "Metadata block off — click to include file / episode info"
+            }
+            aria-label="Markdown: metadata block"
+            aria-pressed={config.includeMeta}
+            disabled={!storeReady || processing}
+            onClick={() => toggleMdOutput("includeMeta")}
+          >
+            <FileText className="icon" size={20} />
+          </button>
+          <button
+            type="button"
+            className={`icon-btn${config.includeSummary ? " icon-btn-toggle-on" : ""}`}
+            title={
+              config.includeSummary
+                ? hasApiKey
+                  ? "Summary (LLM) on — click to disable"
+                  : "Summary on, but no API key yet (skipped until a key is set in Settings)"
+                : "Summary (LLM) off — click to enable"
+            }
+            aria-label="Markdown: summary"
+            aria-pressed={config.includeSummary}
+            disabled={!storeReady || processing}
+            onClick={() => toggleMdOutput("includeSummary")}
+          >
+            <Sparkles className="icon" size={20} />
+          </button>
+          <button
+            type="button"
+            className={`icon-btn${config.includeTranscript ? " icon-btn-toggle-on" : ""}`}
+            title={
+              config.includeTranscript
+                ? "Transcript on — click to omit from Markdown"
+                : "Transcript off — click to include Whisper transcript"
+            }
+            aria-label="Markdown: transcript"
+            aria-pressed={config.includeTranscript}
+            disabled={!storeReady || processing}
+            onClick={() => toggleMdOutput("includeTranscript")}
+          >
+            <Captions className="icon" size={20} />
+          </button>
+          <button
+            type="button"
             className={`icon-btn${config.deleteSourceAfterSuccess ? " icon-btn-toggle-danger" : ""}`}
             title={
               config.deleteSourceAfterSuccess
-                ? "Source audio is deleted after successful export — click to keep"
-                : "Source audio is kept after export — click to delete after success"
+                ? "Audio deleted after export (Markdown always kept) — click to keep audio"
+                : "Audio kept after export — click to delete audio only (Markdown stays)"
             }
-            aria-label="Delete source audio after success"
+            aria-label="Delete audio after success"
             aria-pressed={config.deleteSourceAfterSuccess}
             disabled={!storeReady}
             onClick={() =>
@@ -560,15 +727,6 @@ export default function App() {
             }
           >
             <Trash2 className="icon" size={20} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            title={theme === "dark" ? "Light mode" : "Dark mode"}
-            aria-label="Theme"
-            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-          >
-            {theme === "dark" ? <Sun className="icon" size={22} /> : <Moon className="icon" size={22} />}
           </button>
           <button
             type="button"
@@ -747,10 +905,47 @@ export default function App() {
                   </button>
                 </div>
                 <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--muted)" }}>
-                  Episodes are downloaded temporarily for transcription and deleted afterwards; only the
-                  Markdown file is kept here.
+                  Audio and Markdown are saved here. The toolbar trash icon can delete the audio after
+                  export — the Markdown file is always kept.
                 </p>
               </div>
+              {config.podcastRecents.length > 0 ? (
+                <div>
+                  <label className="field-label">Recent feeds</label>
+                  <ul className="podcast-recents">
+                    {config.podcastRecents.map((recent) => (
+                      <li key={recent.feedUrl} className="podcast-recent-row">
+                        <button
+                          type="button"
+                          className="podcast-recent-pick"
+                          disabled={feedBusy}
+                          title="Use this feed and folder"
+                          onClick={() => applyPodcastRecent(recent)}
+                        >
+                          <span className="podcast-recent-title">
+                            {recent.feedTitle || recent.feedUrl}
+                          </span>
+                          <span className="podcast-recent-meta mono">
+                            {recent.feedTitle ? recent.feedUrl : null}
+                            {recent.feedTitle ? " · " : null}
+                            {recent.outputDir}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          title="Remove from recent list"
+                          aria-label={`Remove ${recent.feedTitle || recent.feedUrl}`}
+                          disabled={feedBusy}
+                          onClick={() => removePodcastRecent(recent.feedUrl)}
+                        >
+                          <Trash2 size={15} aria-hidden />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {podcastError ? (
                 <p style={{ margin: 0, fontSize: 12, color: "var(--status-error)" }}>{podcastError}</p>
               ) : null}
@@ -785,225 +980,300 @@ export default function App() {
               </button>
             </div>
             <div className="drawer-body">
-              <p style={{ margin: 0, color: "var(--muted)", fontSize: 12 }}>
-                Settings are stored locally. API keys never leave this device.
-              </p>
-
-              <div>
-                <label className="field-label">Markdown output</label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={config.includeMeta}
-                    onChange={(e) => setConfig({ ...config, includeMeta: e.target.checked })}
-                  />
-                  <span>Metadata block (file / podcast episode info)</span>
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={config.includeSummary}
-                    onChange={(e) => setConfig({ ...config, includeSummary: e.target.checked })}
-                  />
-                  <span>Summary (LLM)</span>
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={config.includeTranscript}
-                    onChange={(e) => setConfig({ ...config, includeTranscript: e.target.checked })}
-                  />
-                  <span>Transcript</span>
-                </label>
-                {outputInvalid ? (
-                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--status-error)" }}>
-                    {config.includeSummary
-                      ? "Summary requires an API key — enter one below or enable the transcript."
-                      : "Enable at least Summary or Transcript — otherwise the output would be empty."}
-                  </p>
-                ) : !config.includeSummary ? (
-                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--muted)" }}>
-                    Without the summary, no LLM API access is needed.
-                  </p>
-                ) : null}
-              </div>
-              <div>
-                <label className="field-label" htmlFor="apiKey">
-                  API key
-                </label>
-                <input
-                  id="apiKey"
-                  className="input"
-                  type="password"
-                  autoComplete="off"
-                  value={config.apiKey}
-                  disabled={!config.includeSummary}
-                  onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
-                />
-                {config.includeSummary && !hasApiKey ? (
-                  <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--status-warn)" }}>
-                    No API key — the summary will be skipped.
-                  </p>
-                ) : null}
-              </div>
-              <div>
-                <label className="field-label" htmlFor="apiBase">
-                  API base URL
-                </label>
-                <input
-                  id="apiBase"
-                  className="input"
-                  value={config.apiBaseUrl}
-                  disabled={!config.includeSummary}
-                  onChange={(e) => setConfig({ ...config, apiBaseUrl: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="field-label" htmlFor="model">
-                  Model
-                </label>
-                <input
-                  id="model"
-                  className="input"
-                  value={config.apiModel}
-                  disabled={!config.includeSummary}
-                  onChange={(e) => setConfig({ ...config, apiModel: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="field-label" htmlFor="wmodel">
-                  Whisper model
-                </label>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <select
-                    id="wmodel"
-                    className="input"
-                    value={modelInfos.some((m) => m.name === config.whisperModel) ? config.whisperModel : "__custom__"}
-                    onChange={(e) => {
-                      if (e.target.value !== "__custom__") {
-                        setConfig({ ...config, whisperModel: e.target.value });
-                      }
-                    }}
-                    style={{ flex: 1 }}
-                  >
-                    {modelInfos.map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name.padEnd(14)} · {m.sizeHint}{m.cached ? " ✓" : ""}
-                      </option>
-                    ))}
-                    {!modelInfos.some((m) => m.name === config.whisperModel) && (
-                      <option value="__custom__">{config.whisperModel} (custom path)</option>
-                    )}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    title="Delete all cached model files"
-                    disabled={clearingCache || modelInfos.every((m) => !m.cached)}
-                    onClick={clearCache}
-                    style={{ flexShrink: 0, whiteSpace: "nowrap" }}
-                  >
-                    {clearingCache ? <Loader2 size={13} className="icon" style={{ animation: "spin 1s linear infinite" }} /> : null}
-                    {clearingCache ? "Deleting…" : "Clear cache"}
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", marginTop: 4 }}>
-                  {modelInfos.map((m) => (
-                    <span key={m.name} style={{ fontSize: 11, color: m.cached ? "var(--status-ok)" : "var(--muted)" }}>
-                      {m.cached ? "✓ " : ""}{m.name}
-                    </span>
-                  ))}
-                </div>
-                <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--muted)" }}>
-                  Auto-downloaded from HuggingFace (ggerganov/whisper.cpp) on first use. ✓ = cached locally.
-                  Or paste an absolute path to a local <code>.bin</code>/<code>.gguf</code> file.
+              <section className="settings-section">
+                <h2 className="settings-section-title">Summary (LLM)</h2>
+                <p className="field-hint">
+                  OpenAI-compatible chat API for the Markdown summary. Only used when Summary is enabled in the
+                  toolbar. Without a key, transcription still works; the summary section is skipped.
                 </p>
-                {!modelInfos.some((m) => m.name === config.whisperModel) && (
+                <div>
+                  <label className="field-label" htmlFor="apiKey">
+                    API key
+                  </label>
                   <input
+                    id="apiKey"
                     className="input"
-                    style={{ marginTop: 6 }}
-                    placeholder="Absolute path to .bin / .gguf file"
-                    value={config.whisperModel}
-                    onChange={(e) => setConfig({ ...config, whisperModel: e.target.value })}
+                    type="password"
+                    autoComplete="off"
+                    value={config.apiKey}
+                    disabled={!config.includeSummary}
+                    onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
                   />
-                )}
-              </div>
-              <div>
-                <label className="field-label" htmlFor="lang">
-                  Transcription language (ISO, e.g. de)
-                </label>
-                <input
-                  id="lang"
-                  className="input"
-                  value={config.language}
-                  onChange={(e) => setConfig({ ...config, language: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="field-label">Summary language</label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
+                  {config.includeSummary && !hasApiKey ? (
+                    <p className="field-hint field-hint-warn">Enter a key to generate summaries.</p>
+                  ) : !config.includeSummary ? (
+                    <p className="field-hint">Summary is off in the toolbar — these fields are unused.</p>
+                  ) : null}
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="apiBase">
+                    API base URL
+                  </label>
                   <input
-                    type="radio"
-                    name="summaryLangMode"
-                    checked={isSummarySystemLanguage(config.summaryLanguage)}
-                    onChange={() => setConfig({ ...config, summaryLanguage: "system" })}
+                    id="apiBase"
+                    className="input"
+                    placeholder="https://api.deepseek.com"
+                    value={config.apiBaseUrl}
+                    disabled={!config.includeSummary}
+                    onChange={(e) => setConfig({ ...config, apiBaseUrl: e.target.value })}
                   />
-                  <span>System language</span>
-                </label>
-                {isSummarySystemLanguage(config.summaryLanguage) && detectedSystemSummaryLang ? (
-                  <p style={{ margin: "0 0 8px 22px", fontSize: 11, color: "var(--muted)" }}>
-                    Detected: {detectedSystemSummaryLang}
+                  <p className="field-hint">Endpoint root, without <code>/v1/chat/completions</code>.</p>
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="model">
+                    Model
+                  </label>
+                  <input
+                    id="model"
+                    className="input"
+                    placeholder="deepseek-v4-pro"
+                    value={config.apiModel}
+                    disabled={!config.includeSummary}
+                    onChange={(e) => setConfig({ ...config, apiModel: e.target.value })}
+                  />
+                  <p className="field-hint">Model id as expected by that provider.</p>
+                </div>
+                <div>
+                  <label className="field-label">Summary language</label>
+                  <p className="field-hint">Language of the written summary (not the spoken audio).</p>
+                  <div className="lang-option-row">
+                    <label className="lang-radio">
+                      <input
+                        type="radio"
+                        name="summaryLangMode"
+                        checked={isSummarySystemLanguage(config.summaryLanguage)}
+                        onChange={() => setConfig({ ...config, summaryLanguage: "system" })}
+                        disabled={!config.includeSummary}
+                      />
+                      <span>System language</span>
+                      {isSummarySystemLanguage(config.summaryLanguage) && detectedSystemSummaryLang ? (
+                        <span className="lang-detected">({detectedSystemSummaryLang})</span>
+                      ) : null}
+                    </label>
+                    <label className="lang-radio">
+                      <input
+                        type="radio"
+                        name="summaryLangMode"
+                        checked={!isSummarySystemLanguage(config.summaryLanguage)}
+                        disabled={!config.includeSummary}
+                        onChange={() => {
+                          const fromWhisper = isTranscriptionAuto(config.language)
+                            ? ""
+                            : config.language;
+                          const iso = isSummarySystemLanguage(config.summaryLanguage)
+                            ? fromWhisper || detectedSystemSummaryLang || "de"
+                            : config.summaryLanguage;
+                          setConfig({ ...config, summaryLanguage: iso || "de" });
+                        }}
+                      />
+                      <span>ISO code</span>
+                    </label>
+                    <input
+                      className="input lang-iso-input"
+                      aria-label="Summary language ISO code"
+                      placeholder="de"
+                      disabled={!config.includeSummary}
+                      value={isSummarySystemLanguage(config.summaryLanguage) ? "" : config.summaryLanguage}
+                      onChange={(e) => setConfig({ ...config, summaryLanguage: e.target.value || "de" })}
+                      onFocus={() => {
+                        if (isSummarySystemLanguage(config.summaryLanguage)) {
+                          const fromWhisper = isTranscriptionAuto(config.language) ? "" : config.language;
+                          setConfig({
+                            ...config,
+                            summaryLanguage: fromWhisper || detectedSystemSummaryLang || "de",
+                          });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <h2 className="settings-section-title">Transcription (Whisper)</h2>
+                <p className="field-hint">
+                  Local speech-to-text on this device. Produces the transcript section of the Markdown output.
+                </p>
+                <div>
+                  <label className="field-label" htmlFor="wmodel">
+                    Whisper model
+                  </label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <select
+                      id="wmodel"
+                      className="input"
+                      value={modelInfos.some((m) => m.name === config.whisperModel) ? config.whisperModel : "__custom__"}
+                      onChange={(e) => {
+                        if (e.target.value === "__custom__") {
+                          if (modelInfos.some((m) => m.name === config.whisperModel)) {
+                            setConfig({ ...config, whisperModel: "" });
+                          }
+                          return;
+                        }
+                        setConfig({ ...config, whisperModel: e.target.value });
+                      }}
+                      style={{ flex: 1 }}
+                    >
+                      {modelInfos.map((m) => (
+                        <option key={m.name} value={m.name}>
+                          {m.name.padEnd(14)} · {m.sizeHint}{m.cached ? " ✓" : ""}
+                        </option>
+                      ))}
+                      <option value="__custom__">Custom path…</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      title="Delete all downloaded Whisper models from the local cache"
+                      disabled={clearingCache || modelInfos.every((m) => !m.cached)}
+                      onClick={clearCache}
+                      style={{ flexShrink: 0, whiteSpace: "nowrap" }}
+                    >
+                      {clearingCache ? <Loader2 size={13} className="icon" style={{ animation: "spin 1s linear infinite" }} /> : null}
+                      {clearingCache ? "Deleting…" : "Clear cache"}
+                    </button>
+                  </div>
+                  {!modelInfos.some((m) => m.name === config.whisperModel) ? (
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <input
+                        className="input"
+                        style={{ flex: 1 }}
+                        placeholder="/absolute/path/to/model.bin"
+                        value={config.whisperModel}
+                        onChange={(e) => setConfig({ ...config, whisperModel: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        title="Choose a local .bin or .gguf model file"
+                        onClick={async () => {
+                          const file = await open({
+                            title: "Whisper model file",
+                            multiple: false,
+                            filters: [{ name: "Whisper model", extensions: ["bin", "gguf"] }],
+                          });
+                          if (typeof file === "string" && file) {
+                            setConfig({ ...config, whisperModel: file });
+                          }
+                        }}
+                        style={{ flexShrink: 0 }}
+                      >
+                        <FolderOpen size={16} aria-hidden />
+                        <span>Choose…</span>
+                      </button>
+                    </div>
+                  ) : null}
+                  <p className="field-hint">
+                    {modelInfos.some((m) => m.name === config.whisperModel)
+                      ? "Larger models are slower but usually more accurate. Named models download on first use (✓ = already cached)."
+                      : "Point to your own Whisper weights (.bin / .gguf)."}
                   </p>
-                ) : null}
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: 6 }}>
-                  <input
-                    type="radio"
-                    name="summaryLangMode"
-                    checked={!isSummarySystemLanguage(config.summaryLanguage)}
-                    onChange={() => {
-                      const iso = isSummarySystemLanguage(config.summaryLanguage)
-                        ? config.language
-                        : config.summaryLanguage;
-                      setConfig({ ...config, summaryLanguage: iso || "de" });
-                    }}
-                  />
-                  <span>ISO code</span>
-                </label>
-                {!isSummarySystemLanguage(config.summaryLanguage) ? (
-                  <input
-                    className="input"
-                    aria-label="Summary language ISO code"
-                    placeholder="de"
-                    value={config.summaryLanguage}
-                    onChange={(e) => setConfig({ ...config, summaryLanguage: e.target.value })}
-                  />
-                ) : null}
-              </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={config.useGpu}
-                  disabled={vulkanAvailable === false}
-                  onChange={(e) => setConfig({ ...config, useGpu: e.target.checked })}
-                />
-                <span>Use GPU</span>
-                <span
-                  className={`badge ${
-                    vulkanAvailable === true
-                      ? "badge-ok"
-                      : vulkanAvailable === false
-                        ? "badge-warn"
-                        : "badge-neutral"
-                  }`}
-                  title="Status of this VoxMD binary"
-                >
-                  {vulkanAvailable === true
-                    ? "Vulkan available"
-                    : vulkanAvailable === false
-                      ? "Vulkan not available"
-                      : "Checking Vulkan…"}
-                </span>
-              </label>
+                </div>
+                <div>
+                  <label className="field-label">Transcription language</label>
+                  <p className="field-hint">Spoken language in the audio. Auto-detect works well; ISO is faster when you know it.</p>
+                  <div className="lang-option-row">
+                    <label className="lang-radio">
+                      <input
+                        type="radio"
+                        name="transcriptionLangMode"
+                        checked={isTranscriptionAuto(config.language)}
+                        onChange={() => setConfig({ ...config, language: "auto" })}
+                      />
+                      <span>Auto-detect</span>
+                    </label>
+                    <label className="lang-radio">
+                      <input
+                        type="radio"
+                        name="transcriptionLangMode"
+                        checked={!isTranscriptionAuto(config.language)}
+                        onChange={() => {
+                          const iso = isTranscriptionAuto(config.language) ? "de" : config.language;
+                          setConfig({ ...config, language: iso || "de" });
+                        }}
+                      />
+                      <span>ISO code</span>
+                    </label>
+                    <input
+                      className="input lang-iso-input"
+                      aria-label="Transcription language ISO code"
+                      placeholder="de"
+                      value={isTranscriptionAuto(config.language) ? "" : config.language}
+                      onChange={(e) => setConfig({ ...config, language: e.target.value || "de" })}
+                      onFocus={() => {
+                        if (isTranscriptionAuto(config.language)) {
+                          setConfig({ ...config, language: "de" });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="field-label">GPU</label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: vulkanAvailable === false ? "default" : "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={config.useGpu}
+                      disabled={vulkanAvailable === false}
+                      onChange={(e) => setConfig({ ...config, useGpu: e.target.checked })}
+                    />
+                    <span>Use GPU (Vulkan)</span>
+                    <span
+                      className={`badge ${
+                        vulkanAvailable === true
+                          ? "badge-ok"
+                          : vulkanAvailable === false
+                            ? "badge-warn"
+                            : "badge-neutral"
+                      }`}
+                      title="Whether this build can use Vulkan and the loader is present"
+                    >
+                      {vulkanAvailable === true
+                        ? "Available"
+                        : vulkanAvailable === false
+                          ? "CPU only"
+                          : "Checking…"}
+                    </span>
+                  </label>
+                  <p className="field-hint">
+                    Speeds up Whisper when Vulkan works on this machine. If unavailable, transcription still runs on CPU.
+                  </p>
+                </div>
+              </section>
+
+              <section className="settings-section">
+                <h2 className="settings-section-title">Appearance</h2>
+                <div className="lang-option-row">
+                  <label className="lang-radio">
+                    <input
+                      type="radio"
+                      name="themeMode"
+                      checked={themeMode === "system"}
+                      onChange={() => setThemeMode("system")}
+                    />
+                    <span>System</span>
+                  </label>
+                  <label className="lang-radio">
+                    <input
+                      type="radio"
+                      name="themeMode"
+                      checked={themeMode === "light"}
+                      onChange={() => setThemeMode("light")}
+                    />
+                    <span>Light</span>
+                  </label>
+                  <label className="lang-radio">
+                    <input
+                      type="radio"
+                      name="themeMode"
+                      checked={themeMode === "dark"}
+                      onChange={() => setThemeMode("dark")}
+                    />
+                    <span>Dark</span>
+                  </label>
+                </div>
+              </section>
+
               {saveError ? (
                 <p style={{ margin: 0, fontSize: 12, color: "var(--status-error)" }}>{saveError}</p>
               ) : null}
@@ -1011,7 +1281,7 @@ export default function App() {
                 <button
                   type="button"
                   className="btn-primary"
-                  disabled={!storeReady || outputInvalid || saveState !== "idle"}
+                  disabled={!storeReady || saveState !== "idle"}
                   onClick={handleSaveSettings}
                   style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
                 >

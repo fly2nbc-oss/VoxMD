@@ -5,6 +5,7 @@ mod meta;
 mod model_download;
 mod pipeline;
 mod podcast;
+mod vulkan_runtime;
 
 use config::AppConfig;
 use model_download::ModelInfo;
@@ -14,7 +15,12 @@ use serde::Serialize;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VulkanStatus {
+    /// Compiled with Cargo feature `gpu-vulkan`.
     built_with_vulkan: bool,
+    /// System Vulkan loader (`libvulkan.so.1` / `vulkan-1.dll`) can be opened.
+    loader_available: bool,
+    /// GPU Whisper path is usable right now (`built_with_vulkan && loader_available`).
+    available: bool,
 }
 
 #[tauri::command]
@@ -24,8 +30,12 @@ fn processing_state() -> bool {
 
 #[tauri::command]
 fn vulkan_status() -> VulkanStatus {
+    let built_with_vulkan = vulkan_runtime::built_with_vulkan();
+    let loader_available = vulkan_runtime::loader_available();
     VulkanStatus {
-        built_with_vulkan: cfg!(feature = "gpu-vulkan"),
+        built_with_vulkan,
+        loader_available,
+        available: built_with_vulkan && loader_available,
     }
 }
 

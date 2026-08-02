@@ -31,49 +31,54 @@ VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript fron
 
 ![VoxMD main window — Linux, light theme](./screenshots/Linux_light.png)
 
-Dark mode uses the same layout with theme colours from Settings / system preference.
+Dark mode uses the same layout; theme preference is System / Light / Dark in Settings.
 
 ## Features
 
 - **Pipelined processing**: At most **one** Whisper transcription and **one** LLM job run at the same time (bounded queue). While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more than one of each stage.
-- **Podcast feeds**: Paste an RSS/Atom feed URL — VoxMD lists all episodes with audio enclosures in the queue. Episodes are downloaded temporarily for transcription and removed afterwards; only the Markdown lands in your chosen output folder.
-- **Queue management**: Add audio files via the file picker or **drag & drop** anywhere in the window; select individual entries or all at once (checkbox column) and remove them from the list before starting.
-- **Configurable Markdown output**: Toggle the **metadata block** (file / episode info), the **LLM summary**, and the **transcript** independently. With the summary disabled, no API access is needed at all.
+- **Podcast feeds**: Paste an RSS/Atom feed URL — VoxMD queues all episodes with audio enclosures. On **Start**, audio is downloaded into your chosen output folder (same basename as the Markdown). Recent feed URL + folder pairs are remembered (up to 10).
+- **Queue management**: Add audio via the file picker or **drag & drop**; checkbox selection with **Remove**; **Start** processes only selected entries when any are checked (otherwise the full queue).
+- **Configurable Markdown output** (toolbar toggles): **metadata**, **LLM summary**, and **transcript**. With the summary off, no API access is needed.
 - **Progress**: Per-file **Status** badge plus **Details** (download / transcription / summary); footer shows overall queue progress and optional model-download progress.
-- **English UI** with light/dark theme (slate-blue accents, Lucide outline icons); **delete-source toggle** directly in the toolbar.
-- **Settings**: API URL, key, LLM model, Whisper model name or local GGUF path, transcription language (Whisper), **summary language** (default: system locale; or ISO code) — persisted via `@tauri-apps/plugin-store`. Without an API key, the summary is skipped automatically and VoxMD runs fully offline.
-- **Whisper models**: Known names (e.g. `turbo`) download from Hugging Face into `~/.cache/voxmd/whisper/`; dropdown shows size hints and cache status; **Clear cache** removes downloaded models.
+- **English UI** with System / Light / Dark appearance; **About** via the toolbar info icon; **delete-audio toggle** (trash) deletes audio after a successful export — Markdown is always kept.
+- **Settings**: Summary (LLM) API, Whisper model / language / GPU, Appearance — persisted via `@tauri-apps/plugin-store`. Without an API key, the summary is skipped and VoxMD runs fully offline.
+- **Whisper models**: Preset names (e.g. `turbo`) download from Hugging Face into `~/.cache/voxmd/whisper/`; **Custom path…** + **Choose…** for a local `.bin` / `.gguf`.
 - **Audio formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (decoded via Symphonia).
-- **Optional Vulkan**: Cargo feature `gpu-vulkan` for GPU-backed Whisper where the system provides Vulkan.
+- **Optional Vulkan**: Cargo feature `gpu-vulkan`. The loader is opened at runtime (missing `libvulkan` does not prevent startup; Whisper falls back to CPU).
 
 ## Quick Start
 
 1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** installers (`.msi`, NSIS setup `.exe`) and optional **portable** `VoxMD.exe` — no installer; [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC. **Linux**: `.deb` / `.rpm`; `.AppImage` when bundled successfully.
-2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local GGUF path).
-3. Enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) in settings and press **Save**. No key? The summary is skipped automatically and only the transcript is written.
-4. Add **Files** (local audio) or a **Podcast** feed and press **Start**.
+2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local model file).
+3. Optionally enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) under **Summary (LLM)** in Settings and press **Save**. No key? Enable Transcript in the toolbar; the summary is skipped automatically.
+4. Add **Files** (local audio) or a **Podcast** feed, optionally select entries, then press **Start**.
 
-Output: a `.md` file next to each local audio file; podcast episodes write into the output folder chosen in the Podcast dialog. Existing `.md` files are skipped, so re-running a batch is idempotent.
+**Output:** a `.md` file next to each local audio file; podcast episodes write **audio + Markdown** into the folder chosen in the Podcast dialog (same stem, e.g. `2024 - Title.mp3` and `2024 - Title.md`). Existing `.md` files are skipped, so re-running a batch is idempotent.
 
 ## Usage
 
+### Toolbar
+
+| Control | Description |
+|---|---|
+| Files / Podcast / Remove / Start | Queue management; Start uses the selection when any rows are checked |
+| Metadata / Summary / Transcript | Markdown sections to include (icons) |
+| Trash | When active (red): delete **audio** after a successful `.md` write (local files and podcast downloads). **Markdown is never deleted.** Default: off (keep audio) |
+| Settings / About | Settings drawer; About dialog |
+
 ### Settings (gear icon)
 
-| Field | Description | Default |
+| Section | Fields | Notes |
 |---|---|---|
-| Markdown output | Toggle **Metadata block**, **Summary (LLM)**, and **Transcript** independently | all ✅ |
-| API Base URL / Key / Model | OpenAI-compatible endpoint for the summary; greyed out while the summary is off. **No key → summary is skipped automatically.** | `https://api.deepseek.com` / *(empty)* / `deepseek-v4-pro` |
-| Whisper model | Preset name (`turbo`, …) or absolute path to a `.gguf` file | `turbo` |
-| Transcription language | ISO 639-1 code for Whisper (e.g. `de`) | `de` |
-| Summary language | `system` (OS locale) or ISO 639-1 for LLM summary headings and text | `system` |
+| **Summary (LLM)** | API key, base URL, model, summary language | Used only when Summary is enabled in the toolbar. Base URL is the endpoint root (without `/v1/chat/completions`). Summary language: System or ISO. |
+| **Transcription (Whisper)** | Model, transcription language, Use GPU | Preset or **Custom path…**. Language: Auto-detect (default) or ISO. GPU needs a Vulkan-capable build + loader. |
+| **Appearance** | System / Light / Dark | Applied immediately |
 
-LLM sampling is fixed internally (temperature 0.3, generous token limit) and Whisper thread count is auto-detected — these are no longer settings.
-
-**Save** shows a brief confirmation and closes the panel. The **delete-source toggle** (trash icon) lives in the toolbar: when active (red), local source audio is deleted after a successful `.md` write; podcast downloads are always temporary regardless of this toggle.
+LLM sampling is fixed internally (temperature 0.3, generous token limit) and Whisper thread count is auto-detected — these are not settings.
 
 ### Model selection
 
-Pick a preset in the dropdown (sizes shown). A ✓ means the GGUF is already cached. Presets without ✓ download before transcription. **Clear cache** deletes files under `~/.cache/voxmd/whisper/`.
+Pick a preset in the dropdown (sizes shown). A ✓ means the model is already cached. Presets without ✓ download before transcription. Choose **Custom path…** to browse or paste an absolute path to a `.bin` / `.gguf` file. **Clear cache** deletes files under `~/.cache/voxmd/whisper/`.
 
 ### Output Markdown layout
 
@@ -93,7 +98,7 @@ Pick a preset in the dropdown (sizes shown). A ✓ means the GGUF is already cac
 [HH:MM:SS] Utterance text.
 ```
 
-Each section is controlled by the **Markdown output** checkboxes in Settings. Transcript lines are the raw Whisper output with `[HH:MM:SS]` timestamps; the summary quotes reference those timestamps.
+Each section is controlled by the **Markdown output** toggles in the toolbar. Transcript lines are the raw Whisper output with `[HH:MM:SS]` timestamps; the summary quotes reference those timestamps.
 
 ## Supported Platforms & Formats
 
@@ -128,11 +133,15 @@ npm run tauri dev
 npm run tauri build
 ```
 
-**With Vulkan / GPU Whisper** (Vulkan SDK or headers required on the build machine). The normal `tauri build` is CPU-only; use this command when you want GPU-backed Whisper:
+**With Vulkan / GPU Whisper** (Vulkan SDK or headers required on the build machine). The normal `tauri build` / `tauri dev` is CPU-only; use:
 
 ```bash
 npm run tauri:vulkan
+# or for development:
+bash scripts/ensure-vulkan-sdk.sh && npx tauri dev --features gpu-vulkan
 ```
+
+Vulkan-enabled binaries do not hard-depend on `libvulkan` at load time (link stub + runtime `dlopen`). Without a loader they still start and run Whisper on CPU.
 
 ## Releases
 
@@ -145,10 +154,11 @@ Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflo
 
 ## Troubleshooting
 
-- **Summary missing from the output** — no API key configured: the summary is skipped automatically. Enter a key in Settings to enable it.
-- **Feed loads no episodes** — VoxMD only lists entries with an audio enclosure (`<enclosure>` / media content with an `audio/*` MIME type or audio file extension).
+- **Summary missing from the output** — no API key, or Summary off in the toolbar: the summary is skipped. Enter a key in Settings and enable Summary.
+- **Feed loads no episodes** — VoxMD only lists entries with an audio enclosure (`<enclosure>` / media content with an `audio/*` MIME type or audio file extension). Many hosts truncate RSS to ~100 recent episodes.
 - **A file is skipped with "exists"** — the target `.md` already exists; delete or rename it to re-process.
-- **GPU checkbox greyed out** — this binary was built without the `gpu-vulkan` feature; use a Vulkan release build or `npm run tauri:vulkan`.
+- **No audio in the podcast folder** — press **Start** first (download happens during processing). If the trash toggle is active (red), audio is removed after a successful export; Markdown stays.
+- **GPU checkbox greyed out** — binary without `gpu-vulkan`, or Vulkan loader missing at runtime. The app still starts and runs on CPU.
 - **Linux AppImage fails silently** — bundling requires `linuxdeploy`; `.deb`/`.rpm` packages are unaffected.
 
 ## Roadmap & Known Issues

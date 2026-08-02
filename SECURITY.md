@@ -23,5 +23,8 @@ initial response within 14 days.
 - VoxMD runs entirely locally; the only outbound network traffic is: Whisper
   model downloads from Hugging Face, the OpenAI-compatible API endpoint you
   configure, and the podcast feed/episode URLs you add.
+- Podcast episode audio is stored in the output folder you choose (alongside
+  the Markdown). Optional post-export deletion removes that audio only — never
+  the Markdown file.
 - API keys are stored locally via the Tauri store plugin and are never sent
   anywhere except the configured API base URL.

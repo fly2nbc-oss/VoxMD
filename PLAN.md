@@ -1,4 +1,11 @@
-# VoxMD Umbau-Plan (v0.10.0)
+# VoxMD Umbau-Plan (v0.10.0) — historical
+
+> **Historical only.** This plan targeted a 0.10.0 cut from v0.9.8 (2026-06-11).
+> The work shipped as **1.0.0** with important divergences: podcast audio is
+> persisted in the output folder (not a temp file), Markdown toggles live in the
+> toolbar, Appearance/theme is in Settings, About is a toolbar icon, and
+> `delete_source_after_success` deletes audio only (default off). Prefer
+> `README.md`, `CHANGELOG.md`, and `CLAUDE.md` for current behaviour.
 
 Stand: 2026-06-11 · Basis: v0.9.8 (main)
 
