@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use futures::StreamExt;
 use serde::Serialize;
@@ -129,8 +130,34 @@ async fn download_file(
     dest: &Path,
     on_progress: impl Fn(u64, u64),
 ) -> Result<(), String> {
+    let tmp = dest.with_extension("tmp");
+
+    // Models are up to ~3 GB; a failed attempt must not leave that much garbage
+    // sitting in the cache directory.
+    let res = stream_to_temp(url, &tmp, on_progress).await;
+    if res.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return res;
+    }
+
+    tokio::fs::rename(&tmp, dest)
+        .await
+        .map_err(|e| format!("Rename temp file: {e}"))?;
+
+    Ok(())
+}
+
+async fn stream_to_temp(
+    url: &str,
+    tmp: &Path,
+    on_progress: impl Fn(u64, u64),
+) -> Result<(), String> {
     let client = reqwest::Client::builder()
-        .user_agent("VoxMD/0.1")
+        .user_agent(crate::podcast::USER_AGENT)
+        // This client previously had no timeout at all, so a half-open connection
+        // to HuggingFace wedged the entire batch with no way out but killing the app.
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| format!("HTTP client: {e}"))?;
 
@@ -145,9 +172,8 @@ async fn download_file(
     }
 
     let total = resp.content_length().unwrap_or(0);
-    let tmp = dest.with_extension("tmp");
 
-    let mut file = tokio::fs::File::create(&tmp)
+    let mut file = tokio::fs::File::create(tmp)
         .await
         .map_err(|e| format!("Create temp file: {e}"))?;
 
@@ -155,6 +181,9 @@ async fn download_file(
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
+        if crate::pipeline::cancel_requested() {
+            return Err("Cancelled.".to_string());
+        }
         let chunk = chunk.map_err(|e| format!("Stream: {e}"))?;
         file.write_all(&chunk)
             .await
@@ -166,9 +195,13 @@ async fn download_file(
     file.flush().await.map_err(|e| format!("Flush: {e}"))?;
     drop(file);
 
-    tokio::fs::rename(&tmp, dest)
-        .await
-        .map_err(|e| format!("Rename temp file: {e}"))?;
+    // A truncated body would otherwise be renamed to the final `.bin` and cached
+    // forever, failing later with an opaque "Whisper init" error.
+    if total > 0 && downloaded != total {
+        return Err(format!(
+            "Model download incomplete: got {downloaded} of {total} bytes."
+        ));
+    }
 
     Ok(())
 }

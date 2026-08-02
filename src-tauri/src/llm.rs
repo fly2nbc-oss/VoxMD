@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_openai::config::OpenAIConfig;
 use async_openai::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
@@ -34,11 +36,28 @@ Rules:
     )
 }
 
+/// Upper bound for one summary request. `async_openai` retries 429s internally
+/// with an exponential backoff, so without a per-request timeout a stuck endpoint
+/// could stall the batch indefinitely.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+
 pub fn make_client(cfg: &AppConfig) -> Client<OpenAIConfig> {
     let oc = OpenAIConfig::new()
         .with_api_base(cfg.api_base_url.trim_end_matches('/').to_string())
         .with_api_key(cfg.api_key.clone());
-    Client::with_config(oc)
+
+    let http = reqwest::Client::builder()
+        .user_agent(crate::podcast::USER_AGENT)
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(REQUEST_TIMEOUT)
+        .build();
+
+    match http {
+        Ok(http) => Client::with_config(oc).with_http_client(http),
+        // Falling back to the default client keeps the summary working; it just
+        // loses the timeout, which is strictly better than failing the batch.
+        Err(_) => Client::with_config(oc),
+    }
 }
 
 async fn call_llm(
@@ -72,13 +91,22 @@ async fn call_llm(
 
     let resp = client.chat().create(req).await.map_err(|e| e.to_string())?;
 
-    Ok(resp
+    let text = resp
         .choices
         .first()
         .and_then(|c| c.message.content.clone())
         .unwrap_or_default()
         .trim()
-        .to_string())
+        .to_string();
+
+    // An empty completion (no choices, a content filter, or a tool-only reply) is
+    // a failure, not a successful empty summary — the caller would otherwise write
+    // a Markdown file with nothing but its heading.
+    if text.is_empty() {
+        return Err("the model returned an empty response".to_string());
+    }
+
+    Ok(text)
 }
 
 /// `context` is a short orientation block (title, podcast/episode info); may be empty.

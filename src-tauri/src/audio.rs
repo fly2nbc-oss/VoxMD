@@ -108,8 +108,12 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
                 let chunk = decode_buffer_ref(decoded)?;
                 samples_mono.extend_from_slice(&chunk);
             }
+            // Individual corrupt packets are recoverable; whisper still gets the rest.
             Err(SymphError::DecodeError(_)) => continue,
-            Err(SymphError::IoError(_)) => break,
+            // Only a clean end of stream may stop the loop. Catching every IoError
+            // here silently produced a half transcript that was written as a success
+            // — and the source audio deleted if that option was enabled.
+            Err(SymphError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.to_string()),
         }
     }

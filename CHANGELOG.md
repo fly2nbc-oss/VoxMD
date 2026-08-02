@@ -7,6 +7,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-03
+
+### Fixed
+
+- **App could wedge until restart**: a panic in the transcription task left the internal processing flag set and emitted no `batch_complete`, so every later Start failed with "Processing is already running." while the UI kept spinning. The flag is now released by a drop guard on every exit path, and exactly one `batch_complete` is always emitted.
+- **Podcast episodes could overwrite each other**: episode filenames used only the publication *year*, so a daily show mapped every episode of a year onto one Markdown file and all but the first were silently reported as "skipped (exists)". Names now carry the full `YYYY-MM-DD`. Files written by earlier versions keep their old name and are still recognised, so existing libraries are not re-transcribed.
+- **Source audio could be deleted after writing an empty file**: an empty LLM response was treated as a successful empty summary, which with the transcript disabled produced a Markdown file containing nothing but its heading — and then deleted the audio if that option was on. Empty completions are now an error and the source is kept.
+- **Truncated audio was transcribed as if complete**: any I/O error during decoding silently ended the decode loop and the partial transcript was written as a success. Only a clean end of stream stops decoding now.
+- **Downloads could hang forever**: the Whisper model download had no timeout at all, and the episode download had no read timeout, so a stalled connection blocked the batch with no way out but killing the app. Both now have connect and read timeouts.
+- **Incomplete downloads were cached as valid**: a server closing a response early produced a truncated model or episode file that was renamed to its final name and reused on every later run. The transferred size is now verified against `Content-Length`.
+- **Cancel had no effect during long operations**: it was only checked between files, so it could not interrupt a running transcription or an in-progress download. Whisper now aborts mid-inference and both download loops stop promptly.
+- **Cancel was lost right after Start**: the processing slot is claimed before `start_transcription` returns, so a cancel pressed immediately is no longer discarded.
+- **Progress bar never reached 100% when an item failed**: only successful items advanced the counter. Failed items now count as settled.
+- **Leftover partial files**: a failed episode download left a `.part` file in the output folder and a failed model download left up to 3 GB of `.tmp` in the cache. Both are cleaned up now.
+- Episode and file names derived from feeds or tags are length-capped, stripped of control characters, and no longer collide with Windows device names such as `CON`.
+
+### Added
+
+- Real percentage progress during transcription, replacing the static "Transcribing…" stage.
+- Tests for filename derivation from untrusted feed input, including directory-traversal attempts.
+
+### Changed
+
+- The Whisper model download now reports progress once per percent instead of once per chunk, which for a 3 GB model meant hundreds of thousands of UI events.
+- Markdown is written on the blocking pool rather than on a runtime worker.
+- The locale test no longer mutates process-wide environment variables, which made it order-dependent and prone to failing in CI.
+
 ## [1.0.0] - 2026-08-02
 
 ### Added

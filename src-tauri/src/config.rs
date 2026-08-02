@@ -168,7 +168,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_summary_language, AppConfig};
+    use super::{normalize_iso639_1, resolve_summary_language, AppConfig};
 
     #[test]
     fn resolve_explicit_iso_code() {
@@ -244,13 +244,27 @@ mod tests {
         assert!(err.contains("Summary or Transcript"));
     }
 
+    /// Exercises the locale→ISO step directly instead of going through
+    /// `sys_locale`. Setting `LANG` was both racy (the test harness is
+    /// multi-threaded, and the write leaked into every other test) and unreliable:
+    /// `sys_locale` reads `LANGUAGE`, `LC_ALL` and `LC_MESSAGES` first, so the
+    /// assertion failed on any machine where one of those was set.
     #[test]
-    fn resolve_system_uses_lang_env() {
-        // SAFETY: single-threaded test; no concurrent env access.
-        unsafe {
-            std::env::set_var("LANG", "de_DE.UTF-8");
-        }
-        assert_eq!(resolve_summary_language("system"), "de");
-        assert_eq!(resolve_summary_language("SYSTEM"), "de");
+    fn normalize_locale_to_iso639_1() {
+        assert_eq!(normalize_iso639_1("de_DE.UTF-8"), Some("de".to_string()));
+        assert_eq!(normalize_iso639_1("de-DE"), Some("de".to_string()));
+        assert_eq!(normalize_iso639_1("EN"), Some("en".to_string()));
+        assert_eq!(normalize_iso639_1("pt_BR"), Some("pt".to_string()));
+        assert_eq!(normalize_iso639_1("C"), None);
+        assert_eq!(normalize_iso639_1(""), None);
+        assert_eq!(normalize_iso639_1("42_XX"), None);
+    }
+
+    /// `system` must always resolve to something usable, whatever the host locale.
+    #[test]
+    fn resolve_system_yields_an_iso_code() {
+        let lang = resolve_summary_language("system");
+        assert_eq!(lang.len(), 2, "expected an ISO 639-1 code, got {lang:?}");
+        assert!(lang.chars().all(|c| c.is_ascii_lowercase()));
     }
 }

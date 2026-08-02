@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::meta::AUDIO_EXTENSIONS;
 
+/// Sent on every outgoing HTTP request from the app.
+pub const USER_AGENT: &str = concat!("VoxMD/", env!("CARGO_PKG_VERSION"));
+
 /// One entry in the processing queue: a local audio file or a podcast episode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,7 +62,7 @@ pub async fn fetch_feed(url: &str) -> Result<Vec<EpisodeInfo>, String> {
     }
 
     let client = reqwest::Client::builder()
-        .user_agent("VoxMD")
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| format!("HTTP client: {e}"))?;
@@ -196,9 +199,37 @@ async fn download_to_file(
         std::fs::create_dir_all(parent).map_err(|e| format!("Create output folder: {e}"))?;
     }
 
+    let tmp_path = dest.with_extension(format!(
+        "{}.part",
+        dest.extension().and_then(|e| e.to_str()).unwrap_or("bin")
+    ));
+
+    // Any failure past this point must not leave a `.part` file behind in the
+    // user's output folder — it is never garbage-collected otherwise.
+    let res = stream_to_part_file(url, &tmp_path, on_progress).await;
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return res;
+    }
+
+    std::fs::rename(&tmp_path, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Finalize download: {e}")
+    })?;
+    Ok(())
+}
+
+async fn stream_to_part_file(
+    url: &str,
+    tmp_path: &Path,
+    on_progress: impl Fn(u64, u64),
+) -> Result<(), String> {
     let client = reqwest::Client::builder()
-        .user_agent("VoxMD")
+        .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(30))
+        // Without a read timeout a stalled mid-stream connection hangs the whole
+        // batch forever; the loop below only sees chunks that actually arrive.
+        .read_timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| format!("HTTP client: {e}"))?;
 
@@ -212,16 +243,15 @@ async fn download_to_file(
     }
 
     let total = resp.content_length().unwrap_or(0);
-    let tmp_path = dest.with_extension(format!(
-        "{}.part",
-        dest.extension().and_then(|e| e.to_str()).unwrap_or("bin")
-    ));
     let mut file =
-        std::fs::File::create(&tmp_path).map_err(|e| format!("Create download file: {e}"))?;
+        std::fs::File::create(tmp_path).map_err(|e| format!("Create download file: {e}"))?;
 
     let mut downloaded = 0u64;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        if crate::pipeline::cancel_requested() {
+            return Err("Cancelled.".to_string());
+        }
         let chunk = chunk.map_err(|e| format!("Episode download stream: {e}"))?;
         file.write_all(&chunk)
             .map_err(|e| format!("Write download file: {e}"))?;
@@ -232,10 +262,13 @@ async fn download_to_file(
         .map_err(|e| format!("Flush download file: {e}"))?;
     drop(file);
 
-    std::fs::rename(&tmp_path, dest).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("Finalize download: {e}")
-    })?;
+    // A server can close a response cleanly after sending only part of the body.
+    // Renaming that to the final name would cache a silently truncated episode.
+    if total > 0 && downloaded != total {
+        return Err(format!(
+            "Episode download incomplete: got {downloaded} of {total} bytes."
+        ));
+    }
     Ok(())
 }
 

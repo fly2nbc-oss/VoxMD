@@ -10,7 +10,7 @@ use crate::audio::decode_file_to_mono_16k;
 use crate::config::AppConfig;
 use crate::llm::{self, make_client};
 use crate::meta::{
-    get_audio_metadata, get_audio_path_for_episode, get_md_path, get_md_path_for_episode,
+    self, get_audio_metadata, get_audio_path_for_episode, get_md_path, get_md_path_for_episode,
 };
 use crate::model_download;
 use crate::podcast::{self, QueueItem};
@@ -48,13 +48,36 @@ pub fn is_processing() -> bool {
     PROCESSING.load(Ordering::SeqCst)
 }
 
-pub fn request_cancel() {
-    if PROCESSING.load(Ordering::SeqCst) {
-        CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+/// Claims the processing slot and clears any stale cancel flag.
+///
+/// Called synchronously from `start_transcription` *before* it returns, so the
+/// frontend can never enable its Cancel button while `PROCESSING` is still false
+/// (which used to make `request_cancel` a no-op) and never has its cancel erased
+/// by a later reset.
+pub fn begin_batch() -> Result<(), String> {
+    PROCESSING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .map_err(|_| "Processing is already running.".to_string())?;
+    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Releases the processing slot on drop, so no early return (including a panic
+/// unwinding out of `run_batch`) can leave the app permanently wedged.
+struct ProcessingGuard;
+
+impl Drop for ProcessingGuard {
+    fn drop(&mut self) {
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+        PROCESSING.store(false, Ordering::SeqCst);
     }
 }
 
-fn cancel_requested() -> bool {
+pub fn request_cancel() {
+    CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn cancel_requested() -> bool {
     CANCEL_REQUESTED.load(Ordering::SeqCst)
 }
 
@@ -80,10 +103,14 @@ fn whisper_threads() -> usize {
         .unwrap_or(4)
 }
 
+type ProgressCb = Box<dyn FnMut(i32)>;
+type AbortCb = Box<dyn FnMut() -> bool>;
+
 fn transcribe_one(
     ctx: &WhisperContext,
     audio_path: &Path,
     cfg: &AppConfig,
+    on_progress: impl FnMut(i32) + 'static,
 ) -> Result<String, String> {
     let samples = decode_file_to_mono_16k(audio_path)?;
 
@@ -93,9 +120,20 @@ fn transcribe_one(
     let lang = if lang.is_empty() { "auto" } else { lang };
     params.set_language(Some(lang));
     params.set_n_threads(whisper_threads() as i32);
+    // Inference is by far the longest operation in the app. Without the abort
+    // callback a cancel could not take effect until the whole file was done.
+    // Both need an explicit turbofish: the `O: Into<Option<F>>` bound leaves `F`
+    // ambiguous for the trait solver.
+    params
+        .set_progress_callback_safe::<Option<ProgressCb>, ProgressCb>(Some(Box::new(on_progress)));
+    params.set_abort_callback_safe::<Option<AbortCb>, AbortCb>(Some(Box::new(cancel_requested)));
     state
         .full(params, &samples)
         .map_err(|e| format!("Whisper inference: {e}"))?;
+
+    if cancel_requested() {
+        return Err("Cancelled.".to_string());
+    }
 
     llm::segments_to_raw_text(&state)
 }
@@ -124,7 +162,14 @@ fn prepare_work_item(item: &QueueItem) -> Result<WorkItem, String> {
                 out_dir.display()
             ));
         }
-        let md_path = get_md_path_for_episode(&out_dir, &ep.title, &ep.date);
+        // Episodes written before the stem carried the full date keep their old
+        // name, so upgrading does not re-transcribe an existing library.
+        let legacy = meta::legacy_md_path_for_episode(&out_dir, &ep.title, &ep.date);
+        let md_path = if legacy.exists() {
+            legacy
+        } else {
+            get_md_path_for_episode(&out_dir, &ep.title, &ep.date)
+        };
         let local_audio = get_audio_path_for_episode(
             &out_dir,
             &ep.title,
@@ -224,16 +269,37 @@ async fn llm_stage(
         match llm::generate_summary(&client, &cfg, &summary_context(&job.work), &transcript).await {
             Ok(s) => s.trim().to_string(),
             Err(e) => {
-                let mut p = payload(&id, &display_name, "error");
-                p.overall = Some(overall_snapshot(&done_counter, total));
-                p.message = Some(format!("Summary: {e}"));
-                emit_job(&app, p);
+                emit_error(
+                    &app,
+                    &id,
+                    &display_name,
+                    format!("Summary: {e}"),
+                    &done_counter,
+                    total,
+                );
                 return;
             }
         }
     } else {
         String::new()
     };
+
+    // Refuse to write a file that would carry no content. Without this an empty
+    // completion plus `include_transcript = false` produced a bare "# Title" —
+    // and the source audio was then deleted below.
+    if summary.is_empty() && !cfg.include_transcript {
+        emit_error(
+            &app,
+            &id,
+            &display_name,
+            "Summary was empty and the transcript is disabled — nothing to write. \
+             Source file kept."
+                .to_string(),
+            &done_counter,
+            total,
+        );
+        return;
+    }
 
     let mut content = format!("# {}\n", job.work.title);
     if cfg.include_meta {
@@ -253,11 +319,24 @@ async fn llm_stage(
     }
 
     let md_path = &job.work.md_path;
-    if let Err(e) = std::fs::write(md_path, content) {
-        let mut p = payload(&id, &display_name, "error");
-        p.overall = Some(overall_snapshot(&done_counter, total));
-        p.message = Some(format!("Save failed: {e}"));
-        emit_job(&app, p);
+    // Blocking write on an async task: transcripts reach a few MB, so hand it to
+    // the blocking pool rather than stalling a runtime worker.
+    let write_res = {
+        let md_path = md_path.clone();
+        tokio::task::spawn_blocking(move || std::fs::write(md_path, content))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()))
+    };
+    if let Err(e) = write_res {
+        emit_error(
+            &app,
+            &id,
+            &display_name,
+            format!("Save failed: {e}"),
+            &done_counter,
+            total,
+        );
         return;
     }
 
@@ -278,30 +357,42 @@ async fn llm_stage(
 
     let c = done_counter.fetch_add(1, Ordering::SeqCst) + 1;
     let mut p = payload(&id, &display_name, "done");
-    p.overall = Some(OverallProgress {
-        completed: c,
-        total,
-        pct: if total > 0 {
-            (c as f32 / total as f32) * 100.0
-        } else {
-            100.0
-        },
-    });
+    p.overall = Some(progress(c, total));
     p.message = Some(format!("Saved: {}{}", md_path.display(), deletion_note));
     emit_job(&app, p);
 }
 
-fn overall_snapshot(done: &Arc<AtomicUsize>, total: usize) -> OverallProgress {
-    let c = done.load(Ordering::SeqCst);
+fn progress(completed: usize, total: usize) -> OverallProgress {
     OverallProgress {
-        completed: c,
+        completed,
         total,
         pct: if total > 0 {
-            (c as f32 / total as f32) * 100.0
+            (completed as f32 / total as f32) * 100.0
         } else {
-            0.0
+            100.0
         },
     }
+}
+
+fn overall_snapshot(done: &Arc<AtomicUsize>, total: usize) -> OverallProgress {
+    progress(done.load(Ordering::SeqCst), total)
+}
+
+/// Terminal failure for one item. Counts it as settled so the overall bar still
+/// reaches 100% when some items fail — previously only the success path counted.
+fn emit_error(
+    app: &AppHandle,
+    id: &str,
+    display_name: &str,
+    message: String,
+    done: &Arc<AtomicUsize>,
+    total: usize,
+) {
+    let c = done.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut p = payload(id, display_name, "error");
+    p.overall = Some(progress(c, total));
+    p.message = Some(message);
+    emit_job(app, p);
 }
 
 fn emit_skipped_tail(
@@ -321,20 +412,32 @@ fn emit_skipped_tail(
 
 /// Pipeline: Whisper (file N+1) and LLM (file N) run in parallel,
 /// but never more than one of each. Channel capacity=1 enforces this.
-pub async fn run_batch(
-    app: AppHandle,
+///
+/// The caller must already hold the processing slot via [`begin_batch`].
+/// Exactly one `batch_complete` is emitted on every exit path — the frontend
+/// clears its `processing` flag there and would otherwise hang forever.
+pub async fn run_batch(app: AppHandle, items: Vec<QueueItem>, cfg: AppConfig) {
+    let _guard = ProcessingGuard;
+
+    let (total, result) = run_batch_inner(&app, items, cfg).await;
+    let cancelled = cancel_requested();
+
+    let mut done = serde_json::json!({ "total": total, "cancelled": cancelled });
+    if let Err(e) = &result {
+        done["error"] = serde_json::Value::String(e.clone());
+    }
+    let _ = app.emit("batch_complete", &done);
+}
+
+/// Returns the number of items that entered the pipeline plus the batch outcome.
+async fn run_batch_inner(
+    app: &AppHandle,
     items: Vec<QueueItem>,
     cfg: AppConfig,
-) -> Result<(), String> {
-    cfg.validate_for_run()?;
-
-    if PROCESSING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err("Processing is already running.".to_string());
+) -> (usize, Result<(), String>) {
+    if let Err(e) = cfg.validate_for_run() {
+        return (0, Err(e));
     }
-    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
 
     // Resolve Whisper model (download from HuggingFace if name given and not cached).
     let model_path = {
@@ -344,8 +447,18 @@ pub async fn run_batch(
             "model_download_progress",
             serde_json::json!({ "stage": "resolving", "model": model_name }),
         );
+        // Throttled to whole percent: the raw callback fires per chunk, which for a
+        // 3 GB model would flood the webview with hundreds of thousands of events.
+        let last_pct = AtomicI32::new(-1);
         match model_download::resolve_model(&model_name.clone(), move |dl, total| {
-            let pct = if total > 0 { dl * 100 / total } else { 0 };
+            let pct = if total > 0 {
+                (dl * 100 / total) as i32
+            } else {
+                0
+            };
+            if last_pct.swap(pct, Ordering::Relaxed) == pct {
+                return;
+            }
             let _ = app_dl.emit(
                 "model_download_progress",
                 serde_json::json!({
@@ -360,11 +473,7 @@ pub async fn run_batch(
         .await
         {
             Ok(p) => p,
-            Err(e) => {
-                CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-                PROCESSING.store(false, Ordering::SeqCst);
-                return Err(e);
-            }
+            Err(e) => return (0, Err(e)),
         }
     };
     let _ = app.emit(
@@ -379,14 +488,14 @@ pub async fn run_batch(
             Err(e) => {
                 let mut p = payload(&item.id, &item.display_name, "error");
                 p.message = Some(e);
-                emit_job(&app, p);
+                emit_job(app, p);
                 continue;
             }
         };
         if wi.md_path.exists() {
             let mut p = payload(&wi.item.id, &wi.item.display_name, "skipped");
             p.message = Some(format!("Skipped (exists): {}", wi.md_path.display()));
-            emit_job(&app, p);
+            emit_job(app, p);
             continue;
         }
         work.push(wi);
@@ -394,10 +503,7 @@ pub async fn run_batch(
 
     let total = work.len();
     if total == 0 {
-        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-        PROCESSING.store(false, Ordering::SeqCst);
-        let _ = app.emit("batch_complete", &serde_json::json!({ "total": 0u32 }));
-        return Ok(());
+        return (0, Ok(()));
     }
 
     let done_counter = Arc::new(AtomicUsize::new(0));
@@ -419,14 +525,12 @@ pub async fn run_batch(
         let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
             .map_err(|e| format!("Whisper init: {e}"))?;
 
-        let n_items = work.len();
-        for idx in 0..n_items {
+        for (idx, wi) in work.iter().enumerate() {
             if cancel_requested() {
                 emit_skipped_tail(&app_w, &work, idx, &done_w, total);
                 break;
             }
 
-            let wi = work[idx].clone();
             let id = wi.item.id.clone();
             let display_name = wi.item.display_name.clone();
 
@@ -464,10 +568,13 @@ pub async fn run_batch(
                     match dl {
                         Ok(()) => dest,
                         Err(e) => {
-                            let mut p = payload(&id, &display_name, "error");
-                            p.overall = Some(overall_snapshot(&done_w, total));
-                            p.message = Some(e);
-                            emit_job(&app_w, p);
+                            // A cancel mid-download surfaces here; report the whole
+                            // remaining tail as cancelled rather than as one error.
+                            if cancel_requested() {
+                                emit_skipped_tail(&app_w, &work, idx, &done_w, total);
+                                break;
+                            }
+                            emit_error(&app_w, &id, &display_name, e, &done_w, total);
                             continue;
                         }
                     }
@@ -486,21 +593,44 @@ pub async fn run_batch(
             p.overall = Some(overall_snapshot(&done_w, total));
             emit_job(&app_w, p);
 
-            let raw = match transcribe_one(&ctx, &audio_path, &cfg_w) {
+            // Whisper reports whole percent; dedupe so one event per percent reaches the UI.
+            let on_progress = {
+                let app_pg = app_w.clone();
+                let id_pg = id.clone();
+                let disp_pg = display_name.clone();
+                let mut last = 0i32;
+                move |pct: i32| {
+                    if pct == last {
+                        return;
+                    }
+                    last = pct;
+                    let mut p = payload(&id_pg, &disp_pg, "whisper");
+                    p.whisper_pct = Some(pct);
+                    emit_job(&app_pg, p);
+                }
+            };
+
+            let raw = match transcribe_one(&ctx, &audio_path, &cfg_w, on_progress) {
                 Ok(t) => t,
                 Err(e) => {
-                    let mut p = payload(&id, &display_name, "error");
-                    p.overall = Some(overall_snapshot(&done_w, total));
-                    p.message = Some(e);
-                    emit_job(&app_w, p);
+                    if cancel_requested() {
+                        emit_skipped_tail(&app_w, &work, idx, &done_w, total);
+                        break;
+                    }
+                    emit_error(&app_w, &id, &display_name, e, &done_w, total);
                     continue;
                 }
             };
 
             if raw.trim().is_empty() {
-                let mut p = payload(&id, &display_name, "error");
-                p.message = Some("No speech detected.".to_string());
-                emit_job(&app_w, p);
+                emit_error(
+                    &app_w,
+                    &id,
+                    &display_name,
+                    "No speech detected.".to_string(),
+                    &done_w,
+                    total,
+                );
                 continue;
             }
 
@@ -510,7 +640,7 @@ pub async fn run_batch(
             }
 
             let job = TranscribedJob {
-                work: wi,
+                work: wi.clone(),
                 raw_text: raw,
             };
 
@@ -531,25 +661,18 @@ pub async fn run_batch(
         }
     });
 
-    let wh_res = whisper_task.await.map_err(|e| e.to_string())?;
-    if let Err(e) = wh_res {
-        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-        PROCESSING.store(false, Ordering::SeqCst);
-        let _ = app.emit(
-            "batch_complete",
-            &serde_json::json!({ "total": total, "error": e }),
-        );
-        return Err(e);
+    // Always await the LLM task, including on the error paths below: detaching it
+    // let `job_progress` events arrive after `batch_complete` and revive rows the
+    // frontend had already settled. The sender is dropped either way, so the
+    // receive loop terminates on its own.
+    let wh_res = whisper_task.await;
+    let _ = llm_task.await;
+
+    match wh_res {
+        // Panic inside the blocking task. This used to bail out with `?`, leaving
+        // PROCESSING set forever; the guard in `run_batch` now covers it regardless.
+        Err(e) => (total, Err(format!("Transcription task failed: {e}"))),
+        Ok(Err(e)) => (total, Err(e)),
+        Ok(Ok(())) => (total, Ok(())),
     }
-
-    llm_task.await.ok();
-
-    let cancelled = cancel_requested();
-    CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-    PROCESSING.store(false, Ordering::SeqCst);
-    let _ = app.emit(
-        "batch_complete",
-        &serde_json::json!({ "total": total, "cancelled": cancelled }),
-    );
-    Ok(())
 }

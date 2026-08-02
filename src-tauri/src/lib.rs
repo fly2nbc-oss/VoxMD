@@ -81,8 +81,12 @@ async fn start_transcription(
     config: AppConfig,
 ) -> Result<(), String> {
     config.validate_for_run()?;
+    // Claim the slot before returning, so the frontend cannot enable its Cancel
+    // button while the flag is still unset. `run_batch` releases it via its guard
+    // and reports the outcome through the `batch_complete` event.
+    pipeline::begin_batch()?;
     tokio::spawn(async move {
-        let _ = pipeline::run_batch(app, items, config).await;
+        pipeline::run_batch(app, items, config).await;
     });
     Ok(())
 }
