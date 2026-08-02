@@ -451,11 +451,7 @@ async fn run_batch_inner(
         // 3 GB model would flood the webview with hundreds of thousands of events.
         let last_pct = AtomicI32::new(-1);
         match model_download::resolve_model(&model_name.clone(), move |dl, total| {
-            let pct = if total > 0 {
-                (dl * 100 / total) as i32
-            } else {
-                0
-            };
+            let pct = (dl * 100).checked_div(total).unwrap_or(0) as i32;
             if last_pct.swap(pct, Ordering::Relaxed) == pct {
                 return;
             }
@@ -553,10 +549,11 @@ async fn run_batch_inner(
                         &wi.item.source,
                         &dest,
                         move |dl, total_b| {
-                            if total_b == 0 {
+                            // No Content-Length means no meaningful percentage.
+                            let Some(pct) = (dl * 100).checked_div(total_b) else {
                                 return;
-                            }
-                            let pct = (dl * 100 / total_b) as i32;
+                            };
+                            let pct = pct as i32;
                             if last_pct.swap(pct, Ordering::Relaxed) == pct {
                                 return;
                             }
