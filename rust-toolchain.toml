@@ -1,0 +1,12 @@
+# Single source of truth for the Rust version, used by both CI and local checkouts.
+#
+# Without this, CI floated on whatever `stable` happened to be while developers
+# stayed on whatever they had installed. A clippy lint added in 1.97 was invisible
+# to a 1.94 workstation and only surfaced as a red pipeline after pushing.
+#
+# Bump deliberately: a new stable can introduce lints that fail the `-D warnings`
+# gate, and that should be a reviewed change rather than a surprise.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

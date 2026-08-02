@@ -7,6 +7,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-03
+
+### Security
+
+- **Updated `feed-rs` to 2.4, pulling in `quick-xml` 0.41.** The previous version was affected by RUSTSEC-2026-0194 and RUSTSEC-2026-0195 (both rated 7.5): quadratic parsing time on duplicate attribute names, and unbounded allocation for namespace declarations leading to memory exhaustion. VoxMD parses podcast feeds fetched from arbitrary URLs, so this code path handles untrusted input directly.
+- Updated `quinn-proto` to 0.11.16 for RUSTSEC-2026-0185 (remote memory exhaustion), and `plist`/`tauri-build` to drop a second affected `quick-xml` copy from the build dependencies. `cargo audit` now reports no vulnerabilities.
+
+### Fixed
+
+- **A tag could publish code that was never tested.** The release workflow had no dependency on the lint and test job, so pushing `v*` went straight to building and publishing.
+- **The two build jobs raced to create the same GitHub release**, and the checksum files were attached by tag while the bundles were attached by the release the action happened to create — they could land on different releases. The release is now created once as a draft, both platforms upload into it, and it is only published after every platform has produced artifacts.
+- **A tag whose number disagreed with the manifests was accepted.** The release now fails immediately unless the tag matches `tauri.conf.json`, `package.json` and `Cargo.toml`.
+- The release notes were a fixed template; they are now taken from this changelog.
+- The Linux checksum file listed nested build paths while the Windows one listed bare filenames; both now use bare filenames matching the released assets. An empty checksum file is now an error instead of being uploaded.
+
+### Added
+
+- **`rust-toolchain.toml` pins the Rust version** for CI and local checkouts alike. CI floated on `stable` while developers used whatever they had installed, so a lint introduced in 1.97 was invisible on a 1.94 workstation and only appeared as a failed pipeline.
+- **ESLint**, wired into the job that was already named "Lint & Test" but only type-checked. Includes the React hooks rules that catch the stale-closure and effect-purity mistakes fixed in 1.0.2.
+- **`cargo audit`** as its own CI job.
+- **CI now compiles and tests the `gpu-vulkan` feature.** Releases are built with it, but nothing checked that configuration before the slow build jobs, so a break in the Vulkan runtime probe or the loader stub surfaced late.
+- **CI asserts that `libvulkan` stays out of `DT_NEEDED`.** The loader stub exists so the app still starts on machines without a Vulkan loader; nothing previously verified that guarantee held.
+- `.nvmrc` pins the Node version instead of floating on `lts/*`.
+
+### Changed
+
+- Cargo commands run with `--locked`, so CI cannot silently resolve different dependencies than the committed lockfile.
+- All jobs have explicit timeouts. The Windows build compiles whisper.cpp single-threaded, so a hang previously ran until the six-hour default.
+- CI declares read-only permissions; only the release jobs that need to write do so.
+- Removed the signing secrets from the CI build job. Nothing consumes them — there is no updater plugin configured — so they were exposed on every pull-request build for no benefit.
+
 ## [1.0.2] - 2026-08-03
 
 ### Fixed

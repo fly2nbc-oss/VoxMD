@@ -11,23 +11,30 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: nothing here writes back to the repository.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Lint & Test (Linux)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # No version here: rust-toolchain.toml pins it for CI and local checkouts
+      # alike, so a lint added by a newer stable cannot appear only in CI.
+      - name: Install Rust
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version && cargo clippy --version
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -44,10 +51,16 @@ jobs:
             patchelf \
             clang \
             libclang-dev \
-            llvm-dev
+            llvm-dev \
+            libvulkan-dev \
+            vulkan-tools \
+            glslc
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: ESLint
+        run: npm run lint
 
       - name: TypeScript check & frontend build
         run: npm run build
@@ -58,11 +71,61 @@ jobs:
 
       - name: Rust clippy
         working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Rust tests
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --locked
+
+      # The release binaries are built with `gpu-vulkan`, but nothing used to
+      # compile or test that configuration before the (much slower) build jobs,
+      # so a break in vulkan_runtime.rs or the loader stub surfaced late.
+      - name: Rust clippy & tests (gpu-vulkan)
+        working-directory: src-tauri
+        env:
+          VULKAN_SDK: /usr
+        run: |
+          cargo clippy --all-targets --locked --features gpu-vulkan -- -D warnings
+          cargo test --locked --features gpu-vulkan
+
+      # The loader stub exists so a machine without libvulkan can still start the
+      # app. If libvulkan ends up in DT_NEEDED that guarantee is silently gone.
+      - name: Verify Vulkan loader is not a hard link-time dependency
+        working-directory: src-tauri
+        env:
+          VULKAN_SDK: /usr
+        run: |
+          set -euo pipefail
+          cargo build --locked --features gpu-vulkan --lib
+          lib="target/debug/libvoxmd_lib.so"
+          # Fail rather than skip if the artifact moved, so this cannot quietly
+          # degrade into a check that always passes.
+          if [ ! -f "$lib" ]; then
+            echo "::error::$lib not found; update this check to match the build output."
+            exit 1
+          fi
+          if objdump -p "$lib" | grep -i 'NEEDED.*vulkan'; then
+            echo "::error::libvulkan is a hard dependency; the dlopen stub is not being linked, so the app will not start on machines without a Vulkan loader."
+            exit 1
+          fi
+          echo "OK: no libvulkan entry in DT_NEEDED."
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit
+        working-directory: src-tauri
+        run: cargo audit
 
   build:
     needs: check
@@ -76,6 +139,7 @@ jobs:
             name: Windows
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -83,11 +147,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        shell: bash
+        run: rustup show active-toolchain || rustup toolchain install
 
       - name: Set Windows build paths (before rust-cache)
         if: matrix.platform == 'windows-latest'
@@ -144,9 +209,6 @@ jobs:
 
       - name: Build Tauri app (Vulkan)
         run: npm run tauri -- build --features gpu-vulkan
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Windows portable EXE (no installer)
         if: matrix.platform == 'windows-latest'

@@ -10,8 +10,154 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
+  # A tag used to be able to ship code that had never run fmt, clippy or the
+  # tests, and a tag whose number disagreed with tauri.conf.json would scatter
+  # binaries and checksums across two different releases.
+  verify:
+    name: Verify tag & run checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag must match the version in the manifests
+        id: version
+        run: |
+          set -euo pipefail
+          conf=$(jq -r .version src-tauri/tauri.conf.json)
+          pkg=$(jq -r .version package.json)
+          crate=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
+          tag="${GITHUB_REF_NAME#v}"
+
+          echo "tag=$tag tauri.conf.json=$conf package.json=$pkg Cargo.toml=$crate"
+          for got in "$conf" "$pkg" "$crate"; do
+            if [ "$got" != "$tag" ]; then
+              echo "::error::Tag v$tag does not match all manifests (tauri.conf.json=$conf, package.json=$pkg, Cargo.toml=$crate)."
+              exit 1
+            fi
+          done
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install Rust
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            clang \
+            libclang-dev \
+            llvm-dev \
+            libvulkan-dev \
+            vulkan-tools \
+            glslc
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript check & frontend build
+        run: npm run build
+
+      - name: Rust format
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Rust clippy
+        working-directory: src-tauri
+        env:
+          VULKAN_SDK: /usr
+        run: |
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --all-targets --locked --features gpu-vulkan -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-tauri
+        env:
+          VULKAN_SDK: /usr
+        run: |
+          cargo test --locked
+          cargo test --locked --features gpu-vulkan
+
+  # Created once, up front, as a draft. Both build jobs previously called
+  # tauri-action concurrently for the same tag, racing to create the release.
+  create_release:
+    name: Create draft release
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract this version's changelog section
+        id: notes
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          # Everything between this version's heading and the next one.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { grab = 1; next }
+            grab && /^## \[/ { exit }
+            grab { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No changelog entry found for $version." > release-notes.md
+          fi
+          {
+            echo ""
+            echo "### Downloads"
+            echo ""
+            echo "| Platform | Files |"
+            echo "|----------|-------|"
+            echo "| Windows  | Portable \`VoxMD.exe\` (no installer), plus \`.msi\` and NSIS setup \`.exe\` |"
+            echo "| Linux    | \`.AppImage\` or \`.deb\` |"
+            echo ""
+            echo "Verify downloads against the \`SHA256SUMS-*.txt\` files attached to this release."
+          } >> release-notes.md
+          cat release-notes.md
+
+      - name: Create draft release
+        id: draft
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: VoxMD ${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    name: Build (${{ matrix.name }})
+    needs: [verify, create_release]
     permissions:
       contents: write
     strategy:
@@ -24,8 +170,8 @@ jobs:
           - platform: windows-latest
             name: Windows
             sha_suffix: windows
-    name: Release (${{ matrix.name }})
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +179,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        shell: bash
+        run: rustup show active-toolchain || rustup toolchain install
 
       - name: Set Windows build paths (before rust-cache)
         if: matrix.platform == 'windows-latest'
@@ -91,34 +238,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and publish Tauri release (Vulkan)
-        id: tauri
+      - name: Build and upload bundles (Vulkan)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: 'VoxMD v__VERSION__'
+          releaseId: ${{ needs.create_release.outputs.release_id }}
           args: --features gpu-vulkan
-          releaseBody: |
-            ## VoxMD v__VERSION__
-
-            Local audio transcription with Vulkan-enabled Whisper and LLM post-processing.
-
-            ### Downloads
-
-            | Platform | Files |
-            |----------|------|
-            | Windows  | **Portable** `VoxMD.exe` — no installer; **MSI**, **NSIS** setup `.exe` in release assets |
-            | Linux    | `.AppImage` or `.deb` |
-
-            Verify file integrity with the platform-specific `SHA256SUMS-*.txt` files.
-
-            See [CHANGELOG.md](https://github.com/fly2nbc-oss/VoxMD/blob/main/CHANGELOG.md) for details.
-          releaseDraft: false
-          prerelease: false
 
       - name: Prepare Windows portable EXE (rename for release)
         if: matrix.platform == 'windows-latest'
@@ -137,10 +263,15 @@ jobs:
         run: |
           set -eu
           cd "$BUNDLE_DIR"
-          find . -type f \( \
-            -name "*.deb" -o -name "*.rpm" -o \
-            -name "*.AppImage" \
-          \) -exec sha256sum {} \; | sort > "$OUT"
+          # Bare filenames, matching the Windows side and the names on the release.
+          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) \
+            -exec sha256sum {} \; \
+            | sed 's| \./.*/| |' \
+            | sort > "$OUT"
+          if [ ! -s "$OUT" ]; then
+            echo "::error::No Linux bundles found under $BUNDLE_DIR."
+            exit 1
+          fi
           cat "$OUT"
 
       - name: Generate SHA256SUMS (Windows)
@@ -166,25 +297,49 @@ jobs:
               $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
               $out += "$hash  $($_.Name)"
             }
+          if ($out.Count -eq 0) {
+            Write-Error "No Windows artifacts found to checksum."
+            exit 1
+          }
           $out | Sort-Object | Set-Content $env:OUT
           Get-Content $env:OUT
 
-      - name: Upload SHA256SUMS to release (Linux)
-        if: matrix.platform == 'ubuntu-24.04' && steps.tauri.outputs.releaseId != ''
+      - name: Attach checksums (Linux)
+        if: matrix.platform == 'ubuntu-24.04'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          draft: true
           files: SHA256SUMS-${{ matrix.sha_suffix }}.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload checksum + portable EXE (Windows)
-        if: matrix.platform == 'windows-latest' && steps.tauri.outputs.releaseId != ''
+      - name: Attach checksums + portable EXE (Windows)
+        if: matrix.platform == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          draft: true
           files: |
             SHA256SUMS-${{ matrix.sha_suffix }}.txt
             portable-dist/VoxMD.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Only flip the release live once every platform actually produced artifacts.
+  publish:
+    name: Publish release
+    needs: [verify, create_release, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false \
+            --latest
