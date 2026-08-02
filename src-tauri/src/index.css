@@ -1,0 +1,88 @@
+
+/* Failures of the current batch. The single-slot status line in the footer only
+   ever shows the newest message, so earlier failures need somewhere to live. */
+.error-panel {
+  flex-shrink: 0;
+  background: var(--status-error-bg);
+  border: 1px solid var(--status-error);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm) var(--space-md);
+  max-height: 160px;
+  overflow: auto;
+}
+
+.error-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--status-error);
+  font-size: 12px;
+}
+
+.error-panel-head .icon-btn {
+  margin-left: auto;
+  color: var(--status-error);
+}
+
+.error-panel-list {
+  list-style: none;
+  margin: var(--space-xs) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.error-panel-list li {
+  display: flex;
+  gap: var(--space-sm);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.error-panel-name {
+  flex-shrink: 0;
+  max-width: 40%;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.error-panel-msg {
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.crash-screen {
+  max-width: 560px;
+  margin: 12vh auto;
+  padding: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+}
+
+.crash-screen h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.crash-screen p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.crash-detail {
+  align-self: stretch;
+  margin: 0;
+  padding: var(--space-sm);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-x: auto;
+}

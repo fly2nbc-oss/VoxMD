@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Store } from "@tauri-apps/plugin-store";
 import {
   Captions,
@@ -20,9 +20,11 @@ import {
   Settings,
   Sparkles,
   Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Modal } from "./components/Modal";
 import { defaultConfig } from "./defaults";
 import type { AppConfig, EpisodeInfo, PodcastRecent, QueueItem } from "./types";
 import appIcon from "../src-tauri/icons/128x128.png";
@@ -128,6 +130,20 @@ function rememberPodcastRecent(
   };
 }
 
+/** Path out of the backend's `Saved: <path>` / `Skipped (exists): <path>` message. */
+function outputPathOf(row: JobRow): string | null {
+  const msg = row.message;
+  if (!msg) return null;
+  if (row.stage === "done") {
+    // Trailing note, e.g. " (audio deletion failed: ...)", is not part of the path.
+    return msg.replace(/^Saved:\s*/, "").replace(/\s+\(audio deletion failed:.*$/, "") || null;
+  }
+  if (row.stage === "skipped" && msg.startsWith("Skipped (exists): ")) {
+    return msg.slice("Skipped (exists): ".length) || null;
+  }
+  return null;
+}
+
 function toMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -158,9 +174,9 @@ function badgeForStage(stage: string): { className: string; label: string } {
     case "done":     return { className: "badge-ok",      label: "Done"     };
     case "error":    return { className: "badge-error",   label: "Error"    };
     case "skipped":  return { className: "badge-warn",    label: "Skipped"  };
-    case "download": return { className: "badge-llm",     label: "Download" };
-    case "whisper":  return { className: "badge-warn",    label: "Whisper"  };
-    case "llm":      return { className: "badge-llm",     label: "LLM"      };
+    case "download": return { className: "badge-active",  label: "Download" };
+    case "whisper":  return { className: "badge-active",  label: "Whisper"  };
+    case "llm":      return { className: "badge-active",  label: "LLM"      };
     case "queued":   return { className: "badge-neutral", label: "Wait"     };
     default:         return { className: "badge-neutral", label: stage      };
   }
@@ -175,7 +191,9 @@ function detailsForRow(row: JobRow): string {
         ? `Downloading episode… ${row.downloadPct}%`
         : "Downloading episode…";
     case "whisper":
-      return "Transcribing…";
+      return row.whisperPct != null && row.whisperPct > 0
+        ? `Transcribing… ${row.whisperPct}%`
+        : "Transcribing…";
     case "llm":
       return row.message ?? "Summary…";
     case "done":
@@ -196,8 +214,16 @@ export default function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [jobs, setJobs] = useState<Record<string, JobRow>>({});
   const [processing, setProcessing] = useState(false);
+  /** Real state rather than comparing `statusMsg` to a literal — any later
+   *  progress message overwrote that and flipped the UI back to "Running". */
+  const [cancelling, setCancelling] = useState(false);
   const [overall, setOverall] = useState<{ completed: number; total: number } | null>(null);
   const [statusMsg, setStatusMsg] = useState("");
+  /** Failures of the current batch. The footer only ever shows the newest message,
+   *  so without this the earlier ones scroll past unseen. */
+  const [errors, setErrors] = useState<Array<{ id: string; displayName: string; message: string }>>(
+    [],
+  );
   const [modelDownload, setModelDownload] = useState<{ pct: number; model: string } | null>(null);
   const [modelInfos, setModelInfos] = useState<Array<{ name: string; sizeHint: string; cached: boolean }>>([]);
   const [clearingCache, setClearingCache] = useState(false);
@@ -216,6 +242,21 @@ export default function App() {
   const settingsWasOpen = useRef(false);
   const storeRef = useRef<Awaited<ReturnType<typeof Store.load>> | null>(null);
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
+  /** Mirrors `config` so async callers read the current value, not a stale capture. */
+  const configRef = useRef(config);
+  /** Last persisted config, used to discard unsaved drawer edits on close. */
+  const savedConfigRef = useRef(config);
+  const saveTimerRef = useRef<number | undefined>(undefined);
+  /** Read from callbacks that must not re-subscribe when `processing` flips. */
+  const isProcessingRef = useRef(false);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+
+  useEffect(() => {
+    isProcessingRef.current = processing;
+  }, [processing]);
 
   useEffect(() => {
     try {
@@ -251,12 +292,26 @@ export default function App() {
         const store = await Store.load(STORE_FILE, { autoSave: true, defaults: {} });
         storeRef.current = store;
         const saved = await store.get<AppConfig>(CONFIG_KEY);
-        setConfig(mergeConfig(saved ?? undefined));
-        setStoreReady(true);
-      } catch {
+        const merged = mergeConfig(saved ?? undefined);
+        configRef.current = merged;
+        savedConfigRef.current = merged;
+        setConfig(merged);
+      } catch (e) {
+        // Say so rather than silently reverting to defaults — the next save would
+        // otherwise overwrite the settings file the user still has on disk.
+        setStatusMsg(`Settings could not be loaded (${toMsg(e)}). Using defaults.`);
+      } finally {
         setStoreReady(true);
       }
     })();
+  }, []);
+
+  // Recover the running state after a reload: the backend owns it, and without
+  // this the UI could sit disabled behind a batch that had already finished.
+  useEffect(() => {
+    void invoke<boolean>("processing_state")
+      .then(setProcessing)
+      .catch(() => {});
   }, []);
 
   const refreshModelInfos = useCallback(async () => {
@@ -305,55 +360,95 @@ export default function App() {
     }
   }, [refreshModelInfos]);
 
-  const saveConfig = useCallback(async (c: AppConfig) => {
-    const store = storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
-    await store.set(CONFIG_KEY, c);
-    await store.save();
-    setConfig(c);
-  }, []);
+  /** Persists a config change. Accepts an updater so callers that run after an
+   *  `await` cannot write back a `config` captured before it. */
+  const saveConfig = useCallback(
+    async (update: AppConfig | ((prev: AppConfig) => AppConfig)) => {
+      const next = typeof update === "function" ? update(configRef.current) : update;
+      configRef.current = next;
+      savedConfigRef.current = next;
+      setConfig(next);
+      const store =
+        storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
+      await store.set(CONFIG_KEY, next);
+      await store.save();
+    },
+    [],
+  );
 
   useEffect(() => {
-    let unlistenProg: (() => void) | undefined;
-    let unlistenDone: (() => void) | undefined;
+    // Collected rather than assigned one-by-one: `await listen(...)` can resolve
+    // after unmount, and the previous version both dropped the third handle and
+    // leaked the first two in that case.
+    const unlisteners: Array<() => void> = [];
+    let cancelled = false;
+    const track = (stop: () => void) => {
+      if (cancelled) stop();
+      else unlisteners.push(stop);
+    };
 
     (async () => {
-      unlistenProg = await listen<JobProgressPayload>("job_progress", (e) => {
-        const p = e.payload;
-        setJobs((prev) => ({
-          ...prev,
-          [p.path]: { ...p, downloadPct: p.downloadPct ?? prev[p.path]?.downloadPct },
-        }));
-        if (p.overall) {
-          setOverall({ completed: p.overall.completed, total: p.overall.total });
-        }
-        if (p.message && (p.stage === "done" || p.stage === "error" || p.stage === "skipped")) {
-          setStatusMsg(p.message);
-        }
-      });
-      unlistenDone = await listen<{ total: number; cancelled?: boolean; error?: string }>("batch_complete", (e) => {
-        setProcessing(false);
-        setModelDownload(null);
-        if (e.payload.error) setStatusMsg(e.payload.error);
-        else if (e.payload.cancelled) setStatusMsg("Batch cancelled.");
-        else setStatusMsg("Batch complete.");
-      });
+      track(
+        await listen<JobProgressPayload>("job_progress", (e) => {
+          const p = e.payload;
+          setJobs((prev) => ({
+            ...prev,
+            [p.path]: {
+              ...p,
+              downloadPct: p.downloadPct ?? prev[p.path]?.downloadPct,
+              whisperPct: p.whisperPct ?? prev[p.path]?.whisperPct,
+            },
+          }));
+          if (p.overall) {
+            setOverall({ completed: p.overall.completed, total: p.overall.total });
+          }
+          if (p.stage === "error") {
+            setErrors((prev) => [
+              ...prev.filter((x) => x.id !== p.path),
+              { id: p.path, displayName: p.displayName, message: p.message ?? "Failed." },
+            ]);
+          }
+          if (p.message && (p.stage === "done" || p.stage === "error" || p.stage === "skipped")) {
+            setStatusMsg(p.message);
+          }
+        }),
+      );
 
-      await listen<{ stage: string; model?: string; downloaded?: number; total?: number; pct?: number }>(
-        "model_download_progress",
-        (e) => {
+      track(
+        await listen<{ total: number; cancelled?: boolean; error?: string }>(
+          "batch_complete",
+          (e) => {
+            setProcessing(false);
+            setCancelling(false);
+            setModelDownload(null);
+            if (e.payload.error) setStatusMsg(e.payload.error);
+            else if (e.payload.cancelled) setStatusMsg("Batch cancelled.");
+            else setStatusMsg("Batch complete.");
+          },
+        ),
+      );
+
+      track(
+        await listen<{
+          stage: string;
+          model?: string;
+          downloaded?: number;
+          total?: number;
+          pct?: number;
+        }>("model_download_progress", (e) => {
           const { stage, model, pct } = e.payload;
           if (stage === "ready" || stage === "resolving") {
             setModelDownload(null);
           } else if (stage === "downloading" && model != null && pct != null) {
             setModelDownload({ pct, model });
           }
-        },
+        }),
       );
     })();
 
     return () => {
-      unlistenProg?.();
-      unlistenDone?.();
+      cancelled = true;
+      for (const stop of unlisteners) stop();
     };
   }, []);
 
@@ -372,6 +467,9 @@ export default function App() {
       });
       return [...prev, ...fresh];
     });
+    // The finished batch's tally no longer describes the queue; leaving it set
+    // kept "Overall: 12 / 12 done" on screen after adding new files.
+    setOverall((cur) => (isProcessingRef.current ? cur : null));
   }, []);
 
   // Native drag & drop: the Tauri webview suppresses HTML5 drops and emits
@@ -417,20 +515,25 @@ export default function App() {
   }, [addItems]);
 
   const pickFiles = async () => {
-    const sel = await open({
-      title: "Audio files",
-      multiple: true,
-      filters: [
-        {
-          name: "Audio",
-          extensions: AUDIO_EXTENSIONS,
-        },
-      ],
-    });
-    if (!sel) return;
-    const list = Array.isArray(sel) ? sel : [sel];
-    addItems(list.map(localItem));
-    setStatusMsg(`${list.length} file(s) added.`);
+    try {
+      const sel = await open({
+        title: "Audio files",
+        multiple: true,
+        filters: [
+          {
+            name: "Audio",
+            extensions: AUDIO_EXTENSIONS,
+          },
+        ],
+      });
+      if (!sel) return;
+      const list = Array.isArray(sel) ? sel : [sel];
+      addItems(list.map(localItem));
+      setStatusMsg(`${list.length} file(s) added.`);
+    } catch (e) {
+      // An unhandled rejection here just made the button look dead.
+      setStatusMsg(`Could not open the file picker: ${toMsg(e)}`);
+    }
   };
 
   const openPodcast = () => {
@@ -441,11 +544,15 @@ export default function App() {
   };
 
   const choosePodcastDir = async () => {
-    const dir = await open({
-      title: "Output folder for episode Markdown files",
-      directory: true,
-    });
-    if (typeof dir === "string" && dir) setPodcastDir(dir);
+    try {
+      const dir = await open({
+        title: "Output folder for episode Markdown files",
+        directory: true,
+      });
+      if (typeof dir === "string" && dir) setPodcastDir(dir);
+    } catch (e) {
+      setPodcastError(`Could not open the folder picker: ${toMsg(e)}`);
+    }
   };
 
   const addPodcast = async () => {
@@ -472,7 +579,8 @@ export default function App() {
       );
       setPodcastOpen(false);
       setStatusMsg(`${episodes.length} episode(s) added.`);
-      await saveConfig(rememberPodcastRecent(config, url, dir, episodes[0]?.feedTitle));
+      // Updater form: `config` here was captured before the feed request above.
+      await saveConfig((prev) => rememberPodcastRecent(prev, url, dir, episodes[0]?.feedTitle));
     } catch (e) {
       setPodcastError(toMsg(e));
     } finally {
@@ -487,10 +595,31 @@ export default function App() {
   };
 
   const removePodcastRecent = (feedUrl: string) => {
-    void saveConfig({
-      ...config,
-      podcastRecents: config.podcastRecents.filter((r) => r.feedUrl !== feedUrl),
-    });
+    void saveConfig((prev) => ({
+      ...prev,
+      podcastRecents: prev.podcastRecents.filter((r) => r.feedUrl !== feedUrl),
+    }));
+  };
+
+  /** Opens a produced Markdown file, or reveals it if no handler is registered. */
+  const openResult = async (path: string) => {
+    try {
+      await openPath(path);
+    } catch {
+      try {
+        await revealItemInDir(path);
+      } catch (e) {
+        setStatusMsg(`Could not open ${path}: ${toMsg(e)}`);
+      }
+    }
+  };
+
+  const revealResult = async (path: string) => {
+    try {
+      await revealItemInDir(path);
+    } catch (e) {
+      setStatusMsg(`Could not open the folder: ${toMsg(e)}`);
+    }
   };
 
   const toggleSelect = (id: string) => {
@@ -518,10 +647,17 @@ export default function App() {
       return next;
     });
     setSelected(new Set());
-    setStatusMsg(`${count} entry(ies) removed from the list.`);
+    setOverall(null);
+    setStatusMsg(`${count} entr${count === 1 ? "y" : "ies"} removed from the list.`);
   };
 
   const start = async () => {
+    // Starting before the store resolves would send defaultConfig() — no API key,
+    // default model — instead of the user's settings.
+    if (!storeReady) {
+      setStatusMsg("Settings are still loading…");
+      return;
+    }
     if (!items.length) {
       setStatusMsg("No entries in queue.");
       return;
@@ -532,33 +668,53 @@ export default function App() {
       setStatusMsg("No entries selected.");
       return;
     }
+    // Seed the rows *before* invoking. The backend starts emitting job_progress
+    // as soon as the command returns, and writing this afterwards discarded
+    // events that had already landed — files skipped as "already exists" stayed
+    // on "Wait" for the rest of the session.
+    setProcessing(true);
+    setCancelling(false);
+    setSelected(new Set());
+    setErrors([]);
+    setStatusMsg("");
+    // Merged into the previous map, not replacing it, so rows finished by an
+    // earlier run keep their result instead of reverting to "Wait".
+    setJobs((prev) => {
+      const next = { ...prev };
+      for (const item of toProcess) {
+        next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
+      }
+      return next;
+    });
+    setOverall({ completed: 0, total: toProcess.length });
+
     try {
       await invoke("start_transcription", { items: toProcess, config });
-      setProcessing(true);
-      setSelected(new Set());
-      setJobs(() => {
-        const next: Record<string, JobRow> = {};
-        for (const item of toProcess) {
-          next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
-        }
-        return next;
-      });
-      setOverall({ completed: 0, total: toProcess.length });
     } catch (e) {
+      setProcessing(false);
+      setCancelling(false);
+      setOverall(null);
       setStatusMsg(toMsg(e));
     }
   };
 
   const cancelProcessing = async () => {
+    setCancelling(true);
     try {
       await invoke("cancel_transcription");
-      setStatusMsg("Cancelling…");
+      setStatusMsg("Cancelling — finishing the current step…");
     } catch (e) {
+      setCancelling(false);
       setStatusMsg(toMsg(e));
     }
   };
 
   const closeSettings = () => {
+    // Discard unsaved edits. They previously stayed in the live config: closing the
+    // drawer still applied them to the next run, and the next toolbar toggle wrote
+    // them to disk. "Reset defaults" followed by any toggle wiped the saved feeds.
+    setConfig(savedConfigRef.current);
+    configRef.current = savedConfigRef.current;
     setSettingsOpen(false);
     setSaveState("idle");
     setSaveError("");
@@ -590,7 +746,9 @@ export default function App() {
     try {
       await saveConfig(config);
       setSaveState("saved");
-      window.setTimeout(() => {
+      // Tracked so reopening the drawer within the delay does not close it again.
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(() => {
         setSettingsOpen(false);
         setSaveState("idle");
       }, 700);
@@ -599,6 +757,8 @@ export default function App() {
       setSaveError(toMsg(e));
     }
   };
+
+  useEffect(() => () => window.clearTimeout(saveTimerRef.current), []);
 
   const rows = useMemo(
     () =>
@@ -655,8 +815,9 @@ export default function App() {
             <button
               type="button"
               className="icon-btn icon-btn-danger"
-              title="Cancel batch (stops before the next Whisper file after the current work)"
+              title="Cancel batch (stops the current transcription or download)"
               aria-label="Cancel"
+              disabled={cancelling}
               onClick={cancelProcessing}
             >
               <CircleStop size={22} aria-hidden />
@@ -723,7 +884,10 @@ export default function App() {
             aria-pressed={config.deleteSourceAfterSuccess}
             disabled={!storeReady}
             onClick={() =>
-              void saveConfig({ ...config, deleteSourceAfterSuccess: !config.deleteSourceAfterSuccess })
+              void saveConfig((prev) => ({
+                ...prev,
+                deleteSourceAfterSuccess: !prev.deleteSourceAfterSuccess,
+              }))
             }
           >
             <Trash2 className="icon" size={20} />
@@ -758,6 +922,34 @@ export default function App() {
         </div>
       ) : null}
 
+      {errors.length > 0 ? (
+        <section className="error-panel" role="alert" aria-label="Failed entries">
+          <div className="error-panel-head">
+            <TriangleAlert size={16} aria-hidden />
+            <strong>
+              {errors.length} {errors.length === 1 ? "entry" : "entries"} failed
+            </strong>
+            <button
+              type="button"
+              className="icon-btn"
+              title="Dismiss"
+              aria-label="Dismiss error list"
+              onClick={() => setErrors([])}
+            >
+              <X size={16} aria-hidden />
+            </button>
+          </div>
+          <ul className="error-panel-list">
+            {errors.map((err) => (
+              <li key={err.id}>
+                <span className="error-panel-name">{err.displayName}</span>
+                <span className="error-panel-msg mono">{err.message}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <main className="content">
         {items.length === 0 ? (
           <p className="empty-title">
@@ -778,15 +970,23 @@ export default function App() {
                       aria-label="Select all entries"
                     />
                   </th>
-                  <th style={{ width: "40%" }}>File / Episode</th>
-                  <th style={{ width: "90px" }}>Status</th>
-                  <th>Details</th>
+                  <th scope="col" style={{ width: "40%" }}>
+                    File / Episode
+                  </th>
+                  <th scope="col" style={{ width: "90px" }}>
+                    Status
+                  </th>
+                  <th scope="col">Details</th>
+                  <th scope="col" style={{ width: 72 }}>
+                    <span className="visually-hidden">Output</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(({ item, job }) => {
                   const b = badgeForStage(job.stage);
                   const details = detailsForRow(job);
+                  const outputPath = outputPathOf(job);
                   return (
                     <tr key={item.id}>
                       <td>
@@ -802,8 +1002,30 @@ export default function App() {
                       <td>
                         <span className={`badge ${b.className}`}>{b.label}</span>
                       </td>
-                      <td className="mono" style={{ color: "var(--muted)" }}>
-                        {details}
+                      <td className="mono details-cell">{details}</td>
+                      <td className="row-actions">
+                        {outputPath ? (
+                          <>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title={`Open ${outputPath}`}
+                              aria-label={`Open the Markdown file for ${item.displayName}`}
+                              onClick={() => void openResult(outputPath)}
+                            >
+                              <FileText size={16} aria-hidden />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="Show in file manager"
+                              aria-label={`Show the output folder for ${item.displayName}`}
+                              onClick={() => void revealResult(outputPath)}
+                            >
+                              <FolderOpen size={16} aria-hidden />
+                            </button>
+                          </>
+                        ) : null}
                       </td>
                     </tr>
                   );
@@ -822,22 +1044,23 @@ export default function App() {
                   ? `${items.length} queued`
                   : "Empty"}
           </span>
-          <div className="progress-track" title={modelDownload ? `Downloading model: ${modelDownload.pct}%` : "Overall progress"}>
+          <div
+            className="progress-track"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(modelDownload ? modelDownload.pct : overallPct)}
+            aria-label={modelDownload ? "Model download progress" : "Overall batch progress"}
+            title={modelDownload ? `Downloading model: ${modelDownload.pct}%` : "Overall progress"}
+          >
             <div
               className="progress-bar"
               style={{ width: `${Math.min(100, modelDownload ? modelDownload.pct : overallPct)}%` }}
             />
           </div>
-          <span
-            style={{
-              maxWidth: "45%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-end",
-              gap: 6,
-              minWidth: 0,
-            }}
-          >
+          {/* Announced to screen readers: the status line is the only feedback
+              channel for stage changes, results and errors. */}
+          <span className="status-slot" aria-live="polite" aria-atomic="true">
             {modelDownload ? (
               <span className="mono">{`${modelDownload.pct}%`}</span>
             ) : processing ? (
@@ -848,27 +1071,18 @@ export default function App() {
                   aria-hidden
                   style={{ animation: "spin 1s linear infinite", flexShrink: 0 }}
                 />
-                <span>{statusMsg === "Cancelling…" ? "Cancelling…" : "Running"}</span>
+                <span>{cancelling ? "Cancelling…" : "Running"}</span>
               </>
             ) : (
-              <span className="mono" style={{ textAlign: "right" }}>
-                {statusMsg}
-              </span>
+              <span className="mono status-text">{statusMsg}</span>
             )}
           </span>
         </footer>
       </main>
 
       {podcastOpen ? (
-        <div className="drawer-overlay about-overlay" role="presentation" onMouseDown={() => setPodcastOpen(false)}>
-          <div className="modal-dialog" onMouseDown={(ev) => ev.stopPropagation()}>
-            <div className="drawer-header">
-              <strong>Add podcast episodes</strong>
-              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={() => setPodcastOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="drawer-body">
+        <Modal title="Add podcast episodes" onClose={() => setPodcastOpen(false)}>
+          <>
               <div>
                 <label className="field-label" htmlFor="feedUrl">
                   RSS feed URL
@@ -965,21 +1179,13 @@ export default function App() {
                   {feedBusy ? " Loading…" : "Add episodes"}
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
+          </>
+        </Modal>
       ) : null}
 
       {settingsOpen ? (
-        <div className="drawer-overlay" role="presentation" onMouseDown={closeSettings}>
-          <aside className="drawer" onMouseDown={(ev) => ev.stopPropagation()}>
-            <div className="drawer-header">
-              <strong>Settings</strong>
-              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={closeSettings}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="drawer-body">
+        <Modal title="Settings" onClose={closeSettings} variant="drawer">
+          <>
               <section className="settings-section">
                 <h2 className="settings-section-title">Summary (LLM)</h2>
                 <p className="field-hint">
@@ -1298,25 +1504,30 @@ export default function App() {
                     "Save"
                   )}
                 </button>
-                <button type="button" className="btn-secondary" onClick={() => setConfig(defaultConfig())}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  title="Restore default settings (saved podcast feeds are kept)"
+                  onClick={() =>
+                    // Recent feeds are history, not a setting — resetting the form
+                    // must not throw them away.
+                    setConfig((prev) => ({
+                      ...defaultConfig(),
+                      podcastRecents: prev.podcastRecents,
+                      podcastOutputDir: prev.podcastOutputDir,
+                    }))
+                  }
+                >
                   Reset defaults
                 </button>
               </div>
-            </div>
-          </aside>
-        </div>
+          </>
+        </Modal>
       ) : null}
 
       {aboutOpen ? (
-        <div className="drawer-overlay about-overlay" role="presentation" onMouseDown={() => setAboutOpen(false)}>
-          <div className="about-dialog" onMouseDown={(ev) => ev.stopPropagation()}>
-            <div className="drawer-header">
-              <strong>About VoxMD</strong>
-              <button type="button" className="icon-btn" title="Close" aria-label="Close" onClick={() => setAboutOpen(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="drawer-body">
+        <Modal title="About VoxMD" onClose={() => setAboutOpen(false)} panelClassName="about-dialog">
+          <>
               <div className="about-brand">
                 <img src={appIcon} alt="" width={112} height={112} className="about-app-icon" />
               </div>
@@ -1338,14 +1549,9 @@ export default function App() {
                   {GITHUB_URL}
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
+          </>
+        </Modal>
       ) : null}
-
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
     </div>
   );
 }

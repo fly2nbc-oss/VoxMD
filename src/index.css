@@ -5,13 +5,23 @@
   box-sizing: border-box;
 }
 
-*,
-*::before,
-*::after {
+/* Scoped to the interactive surfaces that actually need it. Applying this to
+   every element and pseudo-element janked long queues and flashed the whole UI
+   on each theme change. */
+button,
+input,
+select,
+.badge,
+.table tbody tr,
+.podcast-recent-pick {
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
 }
 
 :root {
+  /* Tells the engine to render checkboxes, radios, <select> popups and
+     scrollbars for the active theme. Without it they stayed light-on-dark. */
+  color-scheme: light;
+
   --font-ui: "Segoe UI", Tahoma, sans-serif;
   --font-mono: "Consolas", "Courier New", monospace;
 
@@ -48,6 +58,8 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   --bg: #0f1923;
   --surface: #1a2535;
   --surface-muted: #1f2e40;
@@ -398,7 +410,8 @@ select.input {
   background: var(--surface-muted);
 }
 
-.badge-llm {
+.badge-llm,
+.badge-active {
   color: var(--accent);
   background: var(--accent-subtle);
 }
@@ -667,10 +680,17 @@ select.input {
   color: currentColor;
 }
 
+/* flex:1 keeps the status footer pinned to the bottom; without it the empty
+   state left the footer floating directly under the text. */
 .empty-title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 16px;
   font-weight: 600;
-  margin: var(--space-lg) auto;
+  margin: 0;
+  padding: var(--space-xl);
   text-align: center;
   color: var(--muted);
 }
@@ -678,4 +698,75 @@ select.input {
 .mono {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+/* The spinner keyframes used to be injected as a <style> tag from the component,
+   which re-rendered it on every update and forced 'unsafe-inline' in any CSP. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Keyboard focus was effectively invisible: only .input had a focus style, and
+   the icon buttons are transparent with no border. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+button:focus-visible,
+.icon-btn:focus-visible,
+.podcast-recent-pick:focus-visible,
+.about-repo-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.table td.details-cell {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.status-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  max-width: 45%;
+}
+
+.status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.row-actions {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

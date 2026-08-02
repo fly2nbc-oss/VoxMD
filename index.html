@@ -1,9 +1,25 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VoxMD</title>
+    <script>
+      // Applied before first paint. React sets this in an effect, i.e. after the
+      // first render, which flashed a white window on every launch in dark mode.
+      (function () {
+        try {
+          var saved = localStorage.getItem("voxmd-theme");
+          var mode = saved === "light" || saved === "dark" ? saved : null;
+          if (!mode) {
+            mode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.setAttribute("data-theme", mode);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

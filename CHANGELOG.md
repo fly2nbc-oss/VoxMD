@@ -7,6 +7,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-03
+
+### Fixed
+
+- **Rows could stay on "Wait" forever**: the queue was seeded *after* the backend had already started reporting, so progress events that arrived in between were discarded — most visibly for episodes skipped as already existing.
+- **Unsaved settings were applied and could be persisted by accident**: closing the drawer without saving kept the edits in the live config, so the next run used them and the next toolbar toggle wrote them to disk. In particular "Reset defaults" followed by any toggle silently erased the saved podcast feeds. Closing now discards unsaved edits, and Reset keeps the feed history.
+- **Stale settings could overwrite newer ones**: adding a podcast wrote back a config captured before the feed request, discarding anything changed while it ran.
+- **A crash in the UI showed a blank window**; there is now an error screen with a reload button.
+- **The Cancel indicator flipped back to "Running"** as soon as any further progress arrived, because it was detected by comparing the status text to a literal.
+- Previously completed rows were reset to "Wait" when a second batch was started on a subset of the queue.
+- The overall tally kept showing a finished batch's numbers after the queue changed.
+- An event listener was never removed, and none were removed if the window closed while they were still being registered.
+- The file and folder pickers could reject without any feedback, leaving the button apparently dead.
+- Starting a batch before the settings finished loading silently used defaults instead of the stored configuration.
+
+### Added
+
+- **Open the result**: finished rows now have buttons to open the generated Markdown file or show it in the file manager. Previously the path was only printed as text.
+- **Failed entries are listed** in a dismissible panel instead of scrolling past in the single-line status field.
+- **Live transcription percentage** in the Details column, replacing the static "Transcribing…".
+- Running state is restored from the backend on startup, so the UI cannot get stuck behind a batch that already finished.
+
+### Changed
+
+- **Dialogs are now real dialogs**: Escape closes them, focus moves into the panel and returns to the trigger afterwards, Tab is trapped inside, and each is labelled for screen readers. Previously Tab walked out into the toolbar underneath, which stayed operable behind the overlay.
+- **Keyboard focus is visible**: only text inputs had a focus style, which left the transparent icon buttons with no usable indicator.
+- Checkboxes, radio buttons, dropdowns and scrollbars follow the dark theme instead of rendering as light controls on a dark surface.
+- The window no longer flashes white on startup in dark mode.
+- Status changes are announced to screen readers, and the progress bar exposes its value.
+- Status badges are colour-coded by meaning — blue while working, green done, red failed, orange skipped — instead of reusing one colour for both an active and a terminal state.
+- Transitions are no longer applied to every element on the page, and `prefers-reduced-motion` is honoured.
+
 ## [1.0.1] - 2026-08-03
 
 ### Fixed
