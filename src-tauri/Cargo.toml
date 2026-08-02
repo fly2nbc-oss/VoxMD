@@ -31,7 +31,7 @@ tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "fs"] 
 whisper-rs = { version = "0.16", default-features = false }
 async-openai = "0.24"
 lofty = "0.22"
-symphonia = { version = "0.5.4", features = ["all"] }
+symphonia = { version = "0.6.0", features = ["all"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 feed-rs = "2"
 futures = "0.3"
