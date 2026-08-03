@@ -48,7 +48,9 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 
 ## Quick Start
 
-1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest): **Windows** installers (`.msi`, NSIS setup `.exe`) and optional **portable** `VoxMD.exe` — no installer; [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC. **Linux**: `.deb` / `.rpm`; `.AppImage` when bundled successfully.
+1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest). Both platforms ship a **portable** build next to their installers:
+   - **Windows** — portable `VoxMD.exe` (no installer), or the `.msi` / NSIS setup `.exe`. [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC.
+   - **Linux** — portable `.AppImage` (`chmod +x`, then run; it carries its own WebKitGTK and GTK libraries), or the `.deb` / `.rpm`. The AppImage is built on Ubuntu 24.04 and needs glibc 2.39 or newer; on older distributions use a package or build from source.
 2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local model file).
 3. Optionally enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) under **Summary (LLM)** in Settings and press **Save**. No key? Enable Transcript in the toolbar; the summary is skipped automatically.
 4. Add **Files** (local audio) or a **Podcast** feed, optionally select entries, then press **Start**.
