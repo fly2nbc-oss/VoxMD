@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+### Added
+
+- Content-Security-Policy for the webview (`default-src 'self'` plus Tauri IPC/`asset:` allowances).
+- Frontend unit tests (Vitest) for queue/job/config helpers; CI and the release verify job run `npm test`.
+- Unit tests for Markdown assembly, empty-output guard, `prepare_work_item`, and model-list helpers.
+- Status notice when GPU is requested but the Vulkan loader is missing; truncation note in Markdown (and LLM status) when the summary only sees the first ~50k characters of a transcript.
+
+### Changed
+
+- Symphonia features narrowed to the formats VoxMD claims (no longer `all`).
+- Release profile uses LTO / single codegen unit / strip; dev builds compile dependencies at `opt-level = 3` so Whisper is usable in `tauri dev`.
+- Model cache clear continues after individual delete failures; custom model paths must be `.bin` / `.gguf` (aligned with config validation).
+- Documented: no in-app auto-updater (SHA-256 sums only); API keys stored in plaintext in the settings store.
+
+### Removed
+
+- Stale historical `PLAN.md` and unused template `src/assets/react.svg`.
+
 ## [1.0.7] - 2026-08-03
 
 ### Fixed

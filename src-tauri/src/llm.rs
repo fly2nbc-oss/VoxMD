@@ -36,9 +36,10 @@ Rules:
     )
 }
 
-/// Upper bound for one summary request. `async_openai` retries 429s internally
-/// with an exponential backoff, so without a per-request timeout a stuck endpoint
-/// could stall the batch indefinitely.
+/// Upper bound for one HTTP attempt. async-openai 0.41 still retries 429/5xx
+/// (OpenAIRetryLayer, default max 3 retries, backoff capped at 8s). The timeout
+/// applies per attempt via the injected reqwest client; cancel is only checked
+/// before `generate_summary`, not during backoff.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub fn make_client(cfg: &AppConfig) -> Client<OpenAIConfig> {
@@ -58,6 +59,11 @@ pub fn make_client(cfg: &AppConfig) -> Client<OpenAIConfig> {
         // loses the timeout, which is strictly better than failing the batch.
         Err(_) => Client::with_config(oc),
     }
+}
+
+/// Whether the transcript exceeds the summary input cap (byte length).
+pub fn transcript_truncated_for_summary(transcript: &str) -> bool {
+    transcript.len() > SUMMARY_MAX_INPUT_CHARS
 }
 
 async fn call_llm(
@@ -116,7 +122,7 @@ pub async fn generate_summary(
     context: &str,
     transcript: &str,
 ) -> Result<String, String> {
-    let text_for_summary = if transcript.len() > SUMMARY_MAX_INPUT_CHARS {
+    let text_for_summary = if transcript_truncated_for_summary(transcript) {
         let mut s = transcript
             .chars()
             .take(SUMMARY_MAX_INPUT_CHARS)
@@ -178,7 +184,9 @@ pub fn segments_to_raw_text(state: &whisper_rs::WhisperState) -> Result<String, 
 
 #[cfg(test)]
 mod tests {
-    use super::{fmt_ts, summary_system_prompt};
+    use super::{
+        fmt_ts, summary_system_prompt, transcript_truncated_for_summary, SUMMARY_MAX_INPUT_CHARS,
+    };
 
     #[test]
     fn fmt_ts_formats_hours_minutes_seconds() {
@@ -193,5 +201,12 @@ mod tests {
         let p = summary_system_prompt("de");
         assert!(p.contains("\"de\""));
         assert!(p.starts_with("You summarize"));
+    }
+
+    #[test]
+    fn truncation_flag_uses_byte_cap() {
+        assert!(!transcript_truncated_for_summary("short"));
+        let over = "a".repeat(SUMMARY_MAX_INPUT_CHARS + 1);
+        assert!(transcript_truncated_for_summary(&over));
     }
 }

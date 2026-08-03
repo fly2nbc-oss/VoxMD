@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:vulkan": "bash scripts/ensure-vulkan-sdk.sh && bash -c 'if [ -f /usr/include/vulkan/vulkan.h ]; then export VULKAN_SDK=/usr; else export VULKAN_SDK=${VULKAN_SDK:-$HOME/.local/vulkan-sdk}; fi; tauri build --features gpu-vulkan'",
-    "lint": "eslint . --max-warnings 0"
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -31,6 +32,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.65.0",
-    "vite": "^8.2.0"
+    "vite": "^8.2.0",
+    "vitest": "^3.2.4"
   }
 }

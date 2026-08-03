@@ -25,9 +25,9 @@ cargo test
 cargo test resolve_explicit_iso_code   # single test
 ```
 
-Unit tests live in-module (`#[cfg(test)]`) in `config.rs`, `llm.rs`, and `podcast.rs`; there are no frontend tests.
+Unit tests live in-module (`#[cfg(test)]`) in `config.rs`, `llm.rs`, `pipeline.rs`, `model_download.rs`, `podcast.rs`, and others; frontend pure helpers under `src/lib/` are covered by Vitest (`npm test`).
 
-CI (`.github/workflows/ci.yml`) runs a Linux lint/test gate (tsc, fmt, clippy, cargo test) and then builds **with `--features gpu-vulkan` on both Linux and Windows**, so Vulkan headers must be present in any environment mirroring CI. Tags `v*` trigger `tauri-release.yml`.
+CI (`.github/workflows/ci.yml`) runs a Linux lint/test gate (eslint, Vitest, tsc, fmt, clippy, cargo test) and then builds **with `--features gpu-vulkan` on both Linux and Windows**, so Vulkan headers must be present in any environment mirroring CI. Tags `v*` trigger `tauri-release.yml`.
 
 ## Architecture
 

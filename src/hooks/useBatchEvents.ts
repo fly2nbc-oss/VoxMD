@@ -57,24 +57,34 @@ export function useBatchEvents(): BatchState {
       track(
         await listen<JobProgressPayload>("job_progress", (e) => {
           const p = e.payload;
-          setJobs((prev) => ({
-            ...prev,
-            [p.path]: {
-              ...p,
-              downloadPct: p.downloadPct ?? prev[p.path]?.downloadPct,
-              whisperPct: p.whisperPct ?? prev[p.path]?.whisperPct,
-            },
-          }));
+          // Batch-wide notices (e.g. GPU fallback) use an empty path and must
+          // not create a phantom queue row.
+          if (p.path) {
+            setJobs((prev) => ({
+              ...prev,
+              [p.path]: {
+                ...p,
+                downloadPct: p.downloadPct ?? prev[p.path]?.downloadPct,
+                whisperPct: p.whisperPct ?? prev[p.path]?.whisperPct,
+              },
+            }));
+          }
           if (p.overall) {
             setOverall({ completed: p.overall.completed, total: p.overall.total });
           }
-          if (p.stage === "error") {
+          if (p.stage === "error" && p.path) {
             setErrors((prev) => [
               ...prev.filter((x) => x.id !== p.path),
               { id: p.path, displayName: p.displayName, message: p.message ?? "Failed." },
             ]);
           }
-          if (p.message && (p.stage === "done" || p.stage === "error" || p.stage === "skipped")) {
+          if (
+            p.message &&
+            (p.stage === "done" ||
+              p.stage === "error" ||
+              p.stage === "skipped" ||
+              !p.path)
+          ) {
             setStatusMsg(p.message);
           }
         }),

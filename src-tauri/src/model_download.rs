@@ -37,34 +37,51 @@ pub fn cache_dir() -> PathBuf {
 }
 
 /// Deletes all cached model files from the cache directory.
+///
+/// Continues after individual delete failures so a single locked file does not
+/// leave the rest of the cache behind; reports a combined error if any failed.
 pub fn clear_model_cache() -> Result<(), String> {
     let dir = cache_dir();
     if !dir.exists() {
         return Ok(());
     }
+    let mut errors = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("Read cache dir: {e}"))? {
-        let entry = entry.map_err(|e| format!("Dir entry: {e}"))?;
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("Dir entry: {e}"));
+                continue;
+            }
+        };
         let p = entry.path();
         if p.is_file() {
-            std::fs::remove_file(&p).map_err(|e| format!("Delete {}: {e}", p.display()))?;
+            if let Err(e) = std::fs::remove_file(&p) {
+                errors.push(format!("Delete {}: {e}", p.display()));
+            }
         }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 pub fn list_models() -> Vec<ModelInfo> {
     let dir = cache_dir();
     MODELS
         .iter()
-        .filter(|(name, filename, _)| {
-            // deduplicate aliases: skip if a prior entry has the same filename
-            let idx = MODELS
+        .enumerate()
+        .filter(|(i, (_, filename, _))| {
+            // Keep the first preset per filename (`turbo` before `large-v3-turbo`).
+            MODELS
                 .iter()
                 .position(|(_, f, _)| f == filename)
-                .expect("invariant: filename came from MODELS so must be found");
-            MODELS[idx].0 == *name
+                .map(|first| first == *i)
+                .unwrap_or(false)
         })
-        .map(|(name, filename, size_hint)| {
+        .map(|(_, (name, filename, size_hint))| {
             let p = dir.join(filename);
             let cached = p.is_file() && p.metadata().map(|m| m.len() > 0).unwrap_or(false);
             ModelInfo {
@@ -89,9 +106,18 @@ fn filename_for(name: &str) -> Option<&'static str> {
         .map(|(_, f, _)| *f)
 }
 
+fn looks_like_model_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    ext == "bin" || ext == "gguf"
+}
+
 /// Resolves `name_or_path` to a local model file, downloading if needed.
 ///
-/// - Existing file path → returned as-is.
+/// - Existing `.bin` / `.gguf` file path → returned as-is.
 /// - Known model name  → cached in `~/.cache/voxmd/whisper/`, downloaded on first use.
 /// - `on_progress(downloaded_bytes, total_bytes)` is called during download.
 pub async fn resolve_model(
@@ -101,6 +127,16 @@ pub async fn resolve_model(
     let trimmed = name_or_path.trim();
     let p = Path::new(trimmed);
     if p.is_file() {
+        if !looks_like_model_file(p) {
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            return Err(format!(
+                "Whisper model must be a .bin or .gguf file, got: .{ext}"
+            ));
+        }
         return Ok(p.to_path_buf());
     }
 
@@ -204,4 +240,32 @@ async fn stream_to_temp(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filename_for_resolves_presets_case_insensitively() {
+        assert_eq!(filename_for("turbo"), Some("ggml-large-v3-turbo.bin"));
+        assert_eq!(filename_for("TURBO"), Some("ggml-large-v3-turbo.bin"));
+        assert_eq!(filename_for("large-v3"), Some("ggml-large-v3.bin"));
+        assert!(filename_for("nope").is_none());
+    }
+
+    #[test]
+    fn list_models_dedupes_turbo_alias() {
+        let names: Vec<_> = list_models().into_iter().map(|m| m.name).collect();
+        assert!(names.contains(&"turbo".to_string()));
+        assert!(!names.contains(&"large-v3-turbo".to_string()));
+        assert_eq!(names.iter().filter(|n| *n == "turbo").count(), 1);
+    }
+
+    #[test]
+    fn looks_like_model_file_accepts_bin_and_gguf() {
+        assert!(looks_like_model_file(Path::new("/x/model.bin")));
+        assert!(looks_like_model_file(Path::new("/x/model.GGUF")));
+        assert!(!looks_like_model_file(Path::new("/x/model.txt")));
+    }
 }

@@ -139,7 +139,7 @@ fn transcribe_one(
 }
 
 /// Queue item with resolved output target and display metadata.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct WorkItem {
     item: QueueItem,
     md_path: PathBuf,
@@ -235,6 +235,48 @@ fn summary_context(work: &WorkItem) -> String {
     }
 }
 
+/// True when writing would produce a file with no summary and no transcript.
+fn should_refuse_empty_output(summary: &str, include_transcript: bool) -> bool {
+    summary.is_empty() && !include_transcript
+}
+
+/// Assembles the Markdown body from the enabled sections.
+///
+/// `truncation_note` is inserted immediately before the summary when the LLM
+/// only saw a prefix of the transcript.
+fn assemble_markdown(
+    title: &str,
+    meta: Option<&str>,
+    summary: &str,
+    transcript: Option<&str>,
+    truncation_note: Option<&str>,
+) -> String {
+    let mut content = format!("# {title}\n");
+    if let Some(meta) = meta {
+        content.push('\n');
+        content.push_str(meta);
+        content.push('\n');
+    }
+    if let Some(note) = truncation_note {
+        content.push('\n');
+        content.push_str(note);
+        content.push('\n');
+    }
+    if !summary.is_empty() {
+        content.push('\n');
+        content.push_str(summary);
+        content.push('\n');
+    }
+    if let Some(transcript) = transcript {
+        content.push_str("\n## Transcript\n\n");
+        content.push_str(transcript);
+        content.push('\n');
+    }
+    content
+}
+
+const SUMMARY_TRUNCATION_NOTE: &str = "> **Note:** The summary was generated from the first ~50,000 characters of the transcript only; later content was not included.";
+
 pub struct TranscribedJob {
     work: WorkItem,
     raw_text: String,
@@ -258,11 +300,16 @@ async fn llm_stage(
     }
 
     let transcript = job.raw_text;
+    let truncated = cfg.summary_enabled() && llm::transcript_truncated_for_summary(&transcript);
 
     // Skipped silently when no API key is configured (see AppConfig::summary_enabled).
     let summary = if cfg.summary_enabled() {
         let mut p = payload(&id, &display_name, "llm");
-        p.message = Some("Summary…".to_string());
+        p.message = Some(if truncated {
+            "Summary… (transcript truncated for LLM input)".to_string()
+        } else {
+            "Summary…".to_string()
+        });
         emit_job(&app, p);
 
         let client = make_client(&cfg);
@@ -287,7 +334,7 @@ async fn llm_stage(
     // Refuse to write a file that would carry no content. Without this an empty
     // completion plus `include_transcript = false` produced a bare "# Title" —
     // and the source audio was then deleted below.
-    if summary.is_empty() && !cfg.include_transcript {
+    if should_refuse_empty_output(&summary, cfg.include_transcript) {
         emit_error(
             &app,
             &id,
@@ -301,22 +348,28 @@ async fn llm_stage(
         return;
     }
 
-    let mut content = format!("# {}\n", job.work.title);
-    if cfg.include_meta {
-        content.push('\n');
-        content.push_str(&meta_block(&job.work));
-        content.push('\n');
-    }
-    if !summary.is_empty() {
-        content.push('\n');
-        content.push_str(&summary);
-        content.push('\n');
-    }
-    if cfg.include_transcript {
-        content.push_str("\n## Transcript\n\n");
-        content.push_str(&transcript);
-        content.push('\n');
-    }
+    let meta = if cfg.include_meta {
+        Some(meta_block(&job.work))
+    } else {
+        None
+    };
+    let truncation_note = if truncated && !summary.is_empty() {
+        Some(SUMMARY_TRUNCATION_NOTE)
+    } else {
+        None
+    };
+    let transcript_section = if cfg.include_transcript {
+        Some(transcript.as_str())
+    } else {
+        None
+    };
+    let content = assemble_markdown(
+        &job.work.title,
+        meta.as_deref(),
+        &summary,
+        transcript_section,
+        truncation_note,
+    );
 
     let md_path = &job.work.md_path;
     // Blocking write on an async task: transcripts reach a few MB, so hand it to
@@ -510,8 +563,19 @@ async fn run_batch_inner(
     let cfg_w = cfg.clone();
     let done_w = done_counter.clone();
     let whisper_task = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let want_gpu = cfg_w.use_gpu;
+        let gpu_ok = crate::vulkan_runtime::gpu_usable();
+        if want_gpu && !gpu_ok {
+            // Settings badge only shows this when the drawer is open; surface it
+            // once at batch start so a "Use GPU" run is not silently on CPU.
+            let mut p = payload("", "", "queued");
+            p.message = Some(
+                "GPU requested but Vulkan loader unavailable — running Whisper on CPU.".to_string(),
+            );
+            emit_job(&app_w, p);
+        }
         let ctx_params = WhisperContextParameters {
-            use_gpu: crate::vulkan_runtime::gpu_usable() && cfg_w.use_gpu,
+            use_gpu: gpu_ok && want_gpu,
             ..Default::default()
         };
 
@@ -671,5 +735,214 @@ async fn run_batch_inner(
         Err(e) => (total, Err(format!("Transcription task failed: {e}"))),
         Ok(Err(e)) => (total, Err(e)),
         Ok(Ok(())) => (total, Ok(())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::podcast::EpisodeMeta;
+    use std::sync::Mutex;
+
+    /// Guards that touch the process-wide PROCESSING / CANCEL atomics.
+    static GUARD_LOCK: Mutex<()> = Mutex::new(());
+
+    fn local_work(title: &str, source: &str) -> WorkItem {
+        WorkItem {
+            item: QueueItem {
+                id: source.to_string(),
+                kind: "local".to_string(),
+                source: source.to_string(),
+                display_name: title.to_string(),
+                episode: None,
+            },
+            md_path: PathBuf::from("/tmp/out.md"),
+            local_audio: PathBuf::from(source),
+            title: title.to_string(),
+            year: Some("2024".to_string()),
+        }
+    }
+
+    fn podcast_work(title: &str, feed: &str, date: Option<&str>) -> WorkItem {
+        let ep = EpisodeMeta {
+            feed_title: feed.to_string(),
+            title: title.to_string(),
+            date: date.map(str::to_string),
+            link: Some("https://example.com/ep".to_string()),
+            output_dir: "/tmp/out".to_string(),
+        };
+        WorkItem {
+            item: QueueItem {
+                id: "https://example.com/a.mp3".to_string(),
+                kind: "podcast".to_string(),
+                source: "https://example.com/a.mp3".to_string(),
+                display_name: title.to_string(),
+                episode: Some(ep),
+            },
+            md_path: PathBuf::from("/tmp/out/ep.md"),
+            local_audio: PathBuf::from("/tmp/out/ep.mp3"),
+            title: title.to_string(),
+            year: None,
+        }
+    }
+
+    #[test]
+    fn assemble_markdown_respects_section_toggles() {
+        let full = assemble_markdown(
+            "Talk",
+            Some("- Source: a.mp3"),
+            "## Summary\nHi",
+            Some("[00:00:00] hello"),
+            None,
+        );
+        assert!(full.starts_with("# Talk\n"));
+        assert!(full.contains("- Source: a.mp3"));
+        assert!(full.contains("## Summary\nHi"));
+        assert!(full.contains("## Transcript\n\n[00:00:00] hello\n"));
+
+        let summary_only = assemble_markdown("Talk", None, "## Summary\nHi", None, None);
+        assert!(!summary_only.contains("Transcript"));
+        assert!(!summary_only.contains("Source"));
+
+        let with_note = assemble_markdown(
+            "Talk",
+            None,
+            "## Summary\nHi",
+            None,
+            Some(SUMMARY_TRUNCATION_NOTE),
+        );
+        assert!(with_note.contains("50,000 characters"));
+        assert!(with_note.find("50,000").unwrap() < with_note.find("## Summary").unwrap());
+    }
+
+    #[test]
+    fn refuse_empty_output_guard() {
+        assert!(should_refuse_empty_output("", false));
+        assert!(!should_refuse_empty_output("", true));
+        assert!(!should_refuse_empty_output("## Summary", false));
+    }
+
+    #[test]
+    fn meta_and_summary_context_for_local_and_podcast() {
+        let local = local_work("Title", "/audio/file.mp3");
+        let meta = meta_block(&local);
+        assert!(meta.contains("Source: file.mp3"));
+        assert!(meta.contains("Year: 2024"));
+        assert_eq!(summary_context(&local), "Title: Title");
+
+        let pod = podcast_work("Ep One", "Feed", Some("2024-06-01"));
+        let meta = meta_block(&pod);
+        assert!(meta.contains("Podcast: Feed"));
+        assert!(meta.contains("Episode: Ep One"));
+        assert!(meta.contains("Published: 2024-06-01"));
+        assert!(meta.contains("Link: https://example.com/ep"));
+        let ctx = summary_context(&pod);
+        assert!(ctx.contains("Podcast: Feed"));
+        assert!(ctx.contains("Published: 2024-06-01"));
+    }
+
+    #[test]
+    fn progress_handles_zero_total() {
+        let p = progress(0, 0);
+        assert_eq!(p.pct, 100.0);
+        let p = progress(1, 4);
+        assert_eq!(p.pct, 25.0);
+    }
+
+    #[test]
+    fn prepare_work_item_rejects_podcast_without_episode() {
+        let item = QueueItem {
+            id: "x".into(),
+            kind: "podcast".into(),
+            source: "https://example.com/a.mp3".into(),
+            display_name: "x".into(),
+            episode: None,
+        };
+        let err = prepare_work_item(&item).unwrap_err();
+        assert!(err.contains("without episode"));
+    }
+
+    #[test]
+    fn prepare_work_item_rejects_missing_output_dir() {
+        let item = QueueItem {
+            id: "x".into(),
+            kind: "podcast".into(),
+            source: "https://example.com/a.mp3".into(),
+            display_name: "x".into(),
+            episode: Some(EpisodeMeta {
+                feed_title: "F".into(),
+                title: "T".into(),
+                date: Some("2024-01-02".into()),
+                link: None,
+                output_dir: "/nonexistent/voxmd-test-dir-xyz".into(),
+            }),
+        };
+        let err = prepare_work_item(&item).unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn prepare_work_item_prefers_legacy_md_path() {
+        let dir = std::env::temp_dir().join(format!("voxmd-pipeline-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy =
+            meta::legacy_md_path_for_episode(&dir, "Daily Show", &Some("2024-03-15".into()));
+        std::fs::write(&legacy, "# old\n").unwrap();
+
+        let item = QueueItem {
+            id: "https://example.com/a.mp3".into(),
+            kind: "podcast".into(),
+            source: "https://example.com/a.mp3".into(),
+            display_name: "Daily Show".into(),
+            episode: Some(EpisodeMeta {
+                feed_title: "Feed".into(),
+                title: "Daily Show".into(),
+                date: Some("2024-03-15".into()),
+                link: None,
+                output_dir: dir.to_string_lossy().into_owned(),
+            }),
+        };
+        let wi = prepare_work_item(&item).unwrap();
+        assert_eq!(wi.md_path, legacy);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prepare_work_item_local_file() {
+        let dir = std::env::temp_dir().join(format!("voxmd-local-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("clip.wav");
+        std::fs::write(&audio, b"not really wav").unwrap();
+
+        let item = QueueItem {
+            id: audio.to_string_lossy().into_owned(),
+            kind: "local".into(),
+            source: audio.to_string_lossy().into_owned(),
+            display_name: "clip.wav".into(),
+            episode: None,
+        };
+        let wi = prepare_work_item(&item).unwrap();
+        assert_eq!(wi.local_audio, audio);
+        assert_eq!(wi.md_path.extension().and_then(|e| e.to_str()), Some("md"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn processing_guard_releases_slot_on_drop() {
+        let _lock = GUARD_LOCK.lock().unwrap();
+        // Clear any leftover from a panicked prior run.
+        PROCESSING.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+
+        begin_batch().unwrap();
+        assert!(is_processing());
+        {
+            let _g = ProcessingGuard;
+        }
+        assert!(!is_processing());
+        begin_batch().unwrap();
+        let _g = ProcessingGuard;
     }
 }

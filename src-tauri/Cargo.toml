@@ -36,7 +36,21 @@ async-openai = { version = "0.41", default-features = false, features = [
     "chat-completion",
 ] }
 lofty = "0.24"
-symphonia = { version = "0.6", features = ["all"] }
+# Formats claimed in README: MP3, M4A/MP4, WAV, OGG, FLAC, WebM (+ PCM).
+# `all` also pulls CAF/AIFF/ALAC/ADPCM and is unnecessary attack surface.
+symphonia = { version = "0.6", default-features = false, features = [
+    "mp3",
+    "aac",
+    "isomp4",
+    "wav",
+    "ogg",
+    "flac",
+    "vorbis",
+    "mkv",
+    "pcm",
+    "opt-simd",
+    "all-meta",
+] }
 # 0.13 renamed the `rustls-tls` feature to `rustls`. Kept in lockstep with
 # async-openai so the binary links one HTTP stack, not two.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
@@ -44,3 +58,13 @@ feed-rs = "2"
 futures = "0.3"
 dirs = "6"
 sys-locale = "0.3"
+
+# Release: smaller binary and faster Whisper inference matter more than link time.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Dev: whisper.cpp is unusable-slow at opt-level 0; compile deps optimized.
+[profile.dev.package."*"]
+opt-level = 3

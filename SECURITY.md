@@ -27,4 +27,7 @@ initial response within 14 days.
   the Markdown). Optional post-export deletion removes that audio only — never
   the Markdown file.
 - API keys are stored locally via the Tauri store plugin and are never sent
-  anywhere except the configured API base URL.
+  anywhere except the configured API base URL. The key is kept in plaintext in
+  the settings JSON (`voxmd-settings.json` under the app data directory). Anyone
+  with access to your user profile can read it — the same trust boundary as
+  other local desktop apps that do not use an OS keyring.

@@ -154,6 +154,8 @@ Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflo
 | `SHA256SUMS-linux.txt` | Hashes for the `.deb` and the `.AppImage` |
 | `SHA256SUMS-windows.txt` | Hashes for the NSIS setup and the portable `VoxMD.exe` |
 
+VoxMD does **not** ship an in-app auto-updater. New versions are announced via GitHub Releases; integrity is checked against the SHA-256 sums above. (The mono-repo convention of publishing a Tauri `latest.json` / updater manifest does not apply here.)
+
 ## Troubleshooting
 
 - **Summary missing from the output** — no API key, or Summary off in the toolbar: the summary is skipped. Enter a key in Settings and enable Summary.
