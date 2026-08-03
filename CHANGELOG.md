@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release notes did not mention the `.rpm` at all and called only the Windows build portable**, which made it look as though Linux had no portable download. The AppImage is exactly that; the Downloads table now lists portable builds and installers per platform, states the AppImage's glibc floor, and includes the `.rpm`. The README's Quick Start said `.AppImage` was produced only "when bundled successfully" — it has been in every release since 1.0.3.
+
 ## [1.0.6] - 2026-08-03
 
 Dependency maintenance. No intended change in behaviour.
