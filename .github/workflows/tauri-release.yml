@@ -57,6 +57,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Same bucket CI fills, so a tag on an already-tested commit restores
+          # the Vulkan-compiled whisper.cpp instead of building it again.
+          shared-key: vulkan-${{ runner.os }}
 
       - name: Install Linux system dependencies
         run: |
@@ -136,10 +139,10 @@ jobs:
             echo ""
             echo "| Platform | Portable (no installation) | Installers |"
             echo "|----------|----------------------------|------------|"
-            echo "| Windows  | \`VoxMD.exe\` | \`.msi\`, NSIS setup \`.exe\` |"
-            echo "| Linux    | \`.AppImage\` — \`chmod +x\`, then run | \`.deb\`, \`.rpm\` |"
+            echo "| Windows  | \`VoxMD.exe\` | NSIS setup \`.exe\` |"
+            echo "| Linux    | \`.AppImage\` — \`chmod +x\`, then run | \`.deb\` |"
             echo ""
-            echo "The AppImage is the portable Linux build: it carries its own WebKitGTK and GTK libraries, so nothing has to be installed. It is built on Ubuntu 24.04 and therefore needs glibc 2.39 or newer — on older distributions use the \`.deb\`/\`.rpm\`, or build from source."
+            echo "The AppImage is the portable Linux build: it carries its own WebKitGTK and GTK libraries, so nothing has to be installed, and it is the build to use on distributions without a \`.deb\` — Arch, Manjaro, Fedora, openSUSE. It is built on Ubuntu 24.04 and therefore needs glibc 2.39 or newer; on older distributions build from source."
             echo ""
             echo "Verify downloads against the \`SHA256SUMS-*.txt\` files attached to this release."
           } >> release-notes.md
@@ -203,6 +206,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: vulkan-${{ runner.os }}
           cache-targets: ${{ matrix.platform != 'windows-latest' }}
 
       - name: Install Linux system dependencies
@@ -240,13 +244,30 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and upload bundles (Vulkan)
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.create_release.outputs.release_id }}
-          args: --features gpu-vulkan
+      # Built and uploaded as separate steps rather than through tauri-action,
+      # which does both at once: the AppImage has to be repacked in between, and
+      # uploading a bundle that is about to be replaced would put a broken
+      # artifact on the release for as long as the job runs.
+      - name: Build bundles (Vulkan)
+        shell: bash
+        run: npm run tauri -- build --features gpu-vulkan
+
+      # Must happen before the checksums are computed, or they describe a file
+      # nobody downloads. See the script header for what it fixes.
+      - name: Drop bundled Wayland libraries from the AppImage
+        if: matrix.platform == 'ubuntu-24.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "::error::No AppImage was produced; refusing to publish a release without it."
+            exit 1
+          fi
+          for img in "${found[@]}"; do
+            bash scripts/fix-appimage-libs.sh "$img"
+          done
 
       - name: Prepare Windows portable EXE (rename for release)
         if: matrix.platform == 'windows-latest'
@@ -266,7 +287,7 @@ jobs:
           set -eu
           cd "$BUNDLE_DIR"
           # Bare filenames, matching the Windows side and the names on the release.
-          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) \
+          find . -type f \( -name "*.deb" -o -name "*.AppImage" \) \
             -exec sha256sum {} \; \
             | sed 's| \./.*/| |' \
             | sort > "$OUT"
@@ -286,7 +307,7 @@ jobs:
           $bundleRoot = "$env:CARGO_TARGET_DIR/release/bundle"
           if (Test-Path $bundleRoot) {
             Get-ChildItem -Path $bundleRoot -Recurse `
-              -Include "*.msi","*.exe","*.nsis" `
+              -Include "*-setup.exe" `
               -ErrorAction SilentlyContinue |
               ForEach-Object {
                 $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
@@ -310,26 +331,45 @@ jobs:
       # returned by GET /releases/tags/{tag}, so an action that resolves by tag
       # would create a *second* draft instead of adding to this one. `gh` falls
       # back to listing releases and so finds the draft.
-      - name: Attach checksums (Linux)
+      - name: Attach bundles + checksums (Linux)
         if: matrix.platform == 'ubuntu-24.04'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          )
+          if [ ${#assets[@]} -ne 2 ]; then
+            echo "::error::Expected one .deb and one .AppImage, found ${#assets[@]}: ${assets[*]-none}"
+            exit 1
+          fi
           gh release upload "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" --clobber \
+            "${assets[@]}" \
             "SHA256SUMS-${{ matrix.sha_suffix }}.txt"
 
-      - name: Attach checksums + portable EXE (Windows)
+      - name: Attach bundles + portable EXE + checksums (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=("${CARGO_TARGET_DIR}/release/bundle/nsis/"*-setup.exe)
+          if [ ${#assets[@]} -ne 1 ]; then
+            echo "::error::Expected one NSIS setup, found ${#assets[@]}: ${assets[*]-none}"
+            exit 1
+          fi
           gh release upload "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" --clobber \
-            "SHA256SUMS-${{ matrix.sha_suffix }}.txt" \
-            "portable-dist/VoxMD.exe"
+            "${assets[@]}" \
+            "portable-dist/VoxMD.exe" \
+            "SHA256SUMS-${{ matrix.sha_suffix }}.txt"
 
   # Only flip the release live once every platform actually produced artifacts.
   publish:

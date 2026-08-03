@@ -7,9 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-08-03
+
 ### Fixed
 
-- **The release notes did not mention the `.rpm` at all and called only the Windows build portable**, which made it look as though Linux had no portable download. The AppImage is exactly that; the Downloads table now lists portable builds and installers per platform, states the AppImage's glibc floor, and includes the `.rpm`. The README's Quick Start said `.AppImage` was produced only "when bundled successfully" — it has been in every release since 1.0.3.
+- **The AppImage opened a window that stayed blank.** linuxdeploy bundles the build machine's `libwayland-client` — Ubuntu 24.04 ships wayland 1.22 — and the AppDir comes first in the library search path. On any distribution with wayland 1.23 or newer and a current Mesa, the system's EGL vendor library then failed to resolve `wl_fixes_interface`, libglvnd was left without a vendor, `eglInitialize` returned `EGL_BAD_PARAMETER`, and WebKit aborted its renderer with `Could not create default EGL display`. The app looked broken while every part of it was fine, and it hit rolling distributions hardest: Arch, Manjaro, Fedora 41+, openSUSE Tumbleweed. `scripts/fix-appimage-libs.sh` now removes those four bundled libraries and repacks the AppImage, reusing the runtime the original already carries so no unpinned binary is fetched mid-release. The workflows run it before the checksums are computed; CI exercises it on pushes to `main` so a break shows up before a tag. Diagnosed and verified end-to-end on Manjaro with wayland 1.25 and Mesa 26.1.
+- Neither `WEBKIT_DISABLE_DMABUF_RENDERER=1` nor `WEBKIT_DISABLE_COMPOSITING_MODE=1` helped, though both are the usual advice for a blank Tauri window — the abort happens before compositing is reached. For an already-downloaded 1.0.6 or earlier AppImage, `LD_PRELOAD=/usr/lib/libwayland-client.so.0` works.
+
+### Changed
+
+- **The `.msi` and `.rpm` bundles are gone**; releases now ship the portable `VoxMD.exe` plus the NSIS setup on Windows, and the `.deb` plus the `.AppImage` on Linux. Measured against the 1.0.6 release, the two dropped bundles cost 49s (WiX) and 53s (rpm) of CI per build round. The AppImage covers every distribution without `.deb` support, which is what the `.rpm` was there for. Anyone deploying the `.msi` by group policy needs the NSIS setup or the portable binary instead.
+- **CI no longer stalls the platform builds behind the Vulkan job.** They were gated on it although they need nothing from it, so every build waited for the slowest gate — 9m16s measured, against 3m57s for the lint and test job they actually depend on. Both now run alongside each other, which takes a full run from 24m51s to roughly 19m30s at identical compute.
+- **The Rust caches are split by feature set.** `check` compiles without `gpu-vulkan` and the build jobs restored *its* target directory, so they recompiled whisper.cpp with Vulkan from scratch: 9m03s on Linux. The Vulkan job and the builds now share one bucket and the CPU-only job has its own. For comparison, the release workflow's Linux build already benefited from a warm Vulkan cache and took 47s.
+- **Pull requests build with `--no-bundle`.** Producing installers costs about 90s on Windows and 125s on Linux and proves nothing a compile and link does not. Pushes to `main` still bundle, so a break in the bundling surfaces before a tag rather than during a release.
+- **`cargo-audit` is installed as a prebuilt binary** instead of being compiled from source, which was almost the entire runtime of that job.
+- The release workflow builds and uploads as separate steps rather than through `tauri-action`, which does both at once. The AppImage has to be repacked in between, and uploading a bundle that is about to be replaced would leave a broken artifact on the release while the job runs.
+
+### Notes
+
+- The release notes previously listed neither the `.rpm` nor Linux as having a portable build, which made it look as though only Windows had one. The Downloads table now names the portable build and the installers per platform and states the AppImage's glibc floor. The README's Quick Start hedged the AppImage as produced only "when bundled successfully"; it has been in every release since 1.0.3.
 
 ## [1.0.6] - 2026-08-03
 
