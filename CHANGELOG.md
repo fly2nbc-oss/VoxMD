@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-08-03
+
+### Fixed
+
+- **Long recordings could exhaust memory.** Audio was fully decoded at its source rate and then resampled into a second complete buffer, so a three-hour 48 kHz episode needed well over 2 GB before transcription even started. Decoding, filtering and resampling now run as a stream and only the 16 kHz result is held. Measured on 20 minutes of 48 kHz stereo, peak memory dropped from roughly 307 MB to 81 MB; for a three-hour episode that is about 2.7 GB down to 0.7 GB.
+- **Resampling introduced aliasing, which degraded transcription quality.** Converting to 16 kHz used plain interpolation with no low-pass, so everything above 8 kHz folded back into the speech band — a 12 kHz component landed at 4 kHz, right where speech lives. A 6th-order Butterworth filter now runs before decimation, attenuating that example by more than 30 dB. Audio recorded at 16 kHz is unaffected, and upsampling skips the filter since it cannot alias.
+- **Chained streams were decoded incorrectly.** A reset from the demuxer was skipped instead of resetting the decoder, which produces garbage on the chained Ogg files that some feeds serve.
+- A per-packet buffer allocation in the decode loop is now reused; a long file decodes into hundreds of thousands of packets.
+
+### Added
+
+- Tests for the audio pipeline, which previously had none: end-to-end decoding of a generated WAV, the anti-aliasing behaviour, resampling in both directions, stereo downmixing, and the error paths.
+
 ## [1.0.3] - 2026-08-03
 
 ### Security
