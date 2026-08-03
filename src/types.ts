@@ -51,6 +51,52 @@ export interface QueueItem {
   episode?: EpisodeMeta | null;
 }
 
+/** Payload of the `job_progress` event (`pipeline.rs::JobProgressPayload`). */
+export interface JobProgressPayload {
+  /** Queue item id — the field is named `path` for historical reasons. */
+  path: string;
+  displayName: string;
+  /** queued, download, whisper, llm, done, skipped, error */
+  stage: string;
+  whisperPct?: number;
+  downloadPct?: number;
+  overall?: { completed: number; total: number; pct: number };
+  message?: string;
+}
+
+/** One row of the queue table: the latest progress payload for that item. */
+export type JobRow = JobProgressPayload;
+
+/** Payload of the `batch_complete` event. */
+export interface BatchCompletePayload {
+  total: number;
+  cancelled?: boolean;
+  error?: string;
+}
+
+/** Payload of the `model_download_progress` event. */
+export interface ModelDownloadPayload {
+  stage: string;
+  model?: string;
+  downloaded?: number;
+  total?: number;
+  pct?: number;
+}
+
+/** One entry in the whisper model dropdown (`list_whisper_models`). */
+export interface WhisperModelInfo {
+  name: string;
+  sizeHint: string;
+  cached: boolean;
+}
+
+/** A failed queue entry, collected for the error panel. */
+export interface JobError {
+  id: string;
+  displayName: string;
+  message: string;
+}
+
 /** Episode as returned by the `fetch_podcast_feed` command. */
 export interface EpisodeInfo {
   feedTitle: string;

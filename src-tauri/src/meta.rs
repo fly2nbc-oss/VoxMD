@@ -188,6 +188,7 @@ fn md_file_name(stem: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::AUDIO_EXTENSIONS;
     use super::{episode_stem, get_audio_path_for_episode, get_md_path_for_episode, is_iso_date};
     use super::{sanitize_filename, MAX_STEM_CHARS};
     use std::path::{Component, Path};
@@ -320,6 +321,33 @@ mod tests {
         assert!(!is_iso_date(""));
         // A malformed date must not end up in the name.
         assert_eq!(episode_stem("Title", &day("garbage")), "Title");
+    }
+
+    /// The frontend keeps its own copy for the file picker and drag-and-drop.
+    /// If the two drift, a format the picker accepts may not be recognised as an
+    /// audio enclosure when the same kind of file arrives from a feed.
+    #[test]
+    fn extension_list_matches_the_frontend() {
+        let ts = std::fs::read_to_string("../src/lib/queue.ts").expect("read queue.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const AUDIO_EXTENSIONS"))
+            .expect("AUDIO_EXTENSIONS declaration in queue.ts");
+        let inside = line
+            .split_once('[')
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(list, _)| list)
+            .expect("bracketed list");
+        let frontend: Vec<String> = inside
+            .split(',')
+            .map(|s| s.trim().trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let backend: Vec<String> = AUDIO_EXTENSIONS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            backend, frontend,
+            "AUDIO_EXTENSIONS in meta.rs and src/lib/queue.ts have drifted"
+        );
     }
 
     #[test]

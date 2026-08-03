@@ -770,3 +770,94 @@ button:focus-visible,
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Replaces four copies of an inline `animation: spin …` style. */
+.spin {
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Layout primitives that replace repeated inline style objects. */
+.field {
+  display: flex;
+  flex-direction: column;
+}
+
+.input-with-button {
+  display: flex;
+  gap: 6px;
+}
+
+.input-with-button .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-with-button > button {
+  flex-shrink: 0;
+}
+
+.form-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--status-error);
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+.settings-actions {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: auto;
+}
+
+.settings-actions .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.custom-model-row {
+  margin-top: 6px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  cursor: pointer;
+}
+
+.checkbox-row:has(input:disabled) {
+  cursor: default;
+}
+
+/* About dialog typography, previously inline style objects. */
+.about-tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.about-version {
+  margin: 0;
+  font-size: 13px;
+}
+
+.about-section-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.muted-text {
+  color: var(--muted);
+}

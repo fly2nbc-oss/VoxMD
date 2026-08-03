@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-03
+
+Internal restructuring. No intended change in behaviour, with two small exceptions noted below.
+
+### Changed
+
+- `App.tsx` went from 1557 lines and 28 pieces of state to 510 lines of composition. The UI is now split into components (toolbar, queue table, status bar, settings drawer, podcast dialog, about dialog, error panel, language picker) and hooks (`useTheme`, `useConfigStore`, `useBatchEvents`, `useNativeDrop`), with the pure logic moved to `src/lib/`. The two language settings shared a near-identical block; they now use one component.
+- The IPC payload types live in `src/types.ts` alongside the rest of the frontend/backend contract instead of being redeclared.
+- Around 30 inline style objects moved into the stylesheet; the handful left are genuinely dynamic (column widths, progress bar width).
+
+### Fixed
+
+- The Whisper model dropdown briefly showed the custom-path field with a preset name in it while the model list was still loading.
+- Opening and quickly closing the settings drawer could write state after it had closed.
+
+### Added
+
+- A test asserting that the supported-extension lists in `meta.rs` and the frontend stay identical. They are necessarily duplicated — the backend uses its copy to decide which feed enclosures count as audio — and nothing previously caught them drifting apart.
+
 ## [1.0.4] - 2026-08-03
 
 ### Fixed
