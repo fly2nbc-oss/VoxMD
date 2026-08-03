@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-08-03
+
 ### Added
 
 - Content-Security-Policy for the webview (`default-src 'self'` plus Tauri IPC/`asset:` allowances).
