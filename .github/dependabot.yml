@@ -23,3 +23,10 @@ updates:
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # typescript-eslint pins its TypeScript peer to `>=4.8.4 <6.1.0`, including
+      # on its canary channel, so TypeScript 7 cannot be installed alongside the
+      # lint setup — `npm ci` fails to resolve. Drop this once typescript-eslint
+      # supports 7.x.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]

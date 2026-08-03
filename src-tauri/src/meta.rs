@@ -75,7 +75,9 @@ pub fn get_audio_metadata(audio_path: &Path) -> (String, Option<String>) {
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| fallback.clone());
 
-    let year = tag.year().map(|y| y.to_string());
+    // lofty 0.24 dropped `Tag::year()` for a full `date()` timestamp, which reads
+    // both the recording date and the plain year tag; only the year is used here.
+    let year = tag.date().map(|d| d.year.to_string());
 
     (title, year)
 }

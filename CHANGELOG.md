@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-08-03
+
+Dependency maintenance. No intended change in behaviour.
+
+### Changed
+
+- **Every open dependency update is now applied.** Minor and patch updates for cargo, npm and the GitHub Actions came in as-is; the four major bumps needed code changes and are listed below.
+- **symphonia 0.5 → 0.6.** The decode path in `audio.rs` was ported to the reworked API: probing returns the format reader directly, audio tracks carry their codec parameters in an `Option<CodecParameters>`, decoders come from `make_audio_decoder`, and end of stream is now an `Ok(None)` packet rather than an unexpected-EOF error. Decoded frames are copied straight into a reused interleaved buffer, which drops the hand-rolled `SampleBuffer` bookkeeping — the streaming, anti-aliased resampling from 1.0.4 is unchanged and still covered by its tests.
+- **lofty 0.22 → 0.24.** `Tag::year()` is gone; the year in a Markdown filename now comes from `Tag::date()`, which reads both the recording date and the plain year tag.
+- **async-openai 0.24 → 0.41.** The chat-completion types moved under `types::chat`, and every API group is now behind its own feature — only `chat-completion` is enabled, so the other endpoints are no longer compiled in.
+- **reqwest 0.12 → 0.13,** required because async-openai 0.41 is built on it. Without this the binary would have linked two HTTP stacks; the summary client also could not have been given its request timeout, since the two versions' `Client` types are unrelated. The `rustls-tls` feature is called `rustls` in 0.13.
+- **vite 7 → 8 and @vitejs/plugin-react 4 → 6.** These had to move together: each on its own fails to install against the other's peer range, which is why the individual update PRs could not pass CI. The plugin no longer pulls Babel in, so the frontend dependency tree is smaller.
+
+### Notes
+
+- **TypeScript stays on 5.8.** typescript-eslint pins its TypeScript peer to `>=4.8.4 <6.1.0` on every channel including canary, so TypeScript 7 cannot be installed next to the lint setup. Major TypeScript updates are ignored in `dependabot.yml` until that changes.
+- The 1.0.4 entry below never had a tag of its own: it was published as part of `v1.0.5`, so there is no `v1.0.4` release to download. The audio fixes it describes are in every build from 1.0.5 onward.
+
 ## [1.0.5] - 2026-08-03
 
 Internal restructuring. No intended change in behaviour, with two small exceptions noted below.

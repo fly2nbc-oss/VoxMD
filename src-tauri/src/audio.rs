@@ -1,13 +1,13 @@
 use std::fs::File;
 use std::path::Path;
 
-use symphonia::core::audio::{SampleBuffer, SignalSpec};
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::audio::{AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
+use symphonia::core::codecs::CodecParameters;
 use symphonia::core::errors::Error as SymphError;
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 const TARGET_RATE: u32 = 16000;
 
@@ -183,39 +183,43 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     }
 
     let src = MediaSourceStream::new(Box::new(file), Default::default());
-    let mss = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             src,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| e.to_string())?;
 
-    let mut format = mss.format;
-    let track = format
+    // A container may carry video or subtitle tracks too, so the track has to
+    // be an audio one whose codec and rate are both known.
+    let (track_id, params, sample_rate) = format
         .tracks()
         .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some())
+        .find_map(|t| {
+            let params = t.codec_params.as_ref().and_then(CodecParameters::audio)?;
+            let rate = params.sample_rate?;
+            (params.codec != CODEC_ID_NULL_AUDIO).then_some((t.id, params, rate))
+        })
         .ok_or_else(|| "No usable audio track".to_string())?;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .ok_or_else(|| "Unknown sample rate".to_string())?;
 
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(params, &AudioDecoderOptions::default())
         .map_err(|e| e.to_string())?;
 
-    let track_id = track.id;
     let mut resampler = Resampler::new(sample_rate, TARGET_RATE);
-    let mut sample_buf: Option<(SampleBuffer<f32>, SignalSpec, u64)> = None;
+    // Both buffers are reused across packets; a long file decodes into hundreds
+    // of thousands of them.
+    let mut interleaved: Vec<f32> = Vec::new();
     let mut mono: Vec<f32> = Vec::new();
     let mut decoded_any = false;
 
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
+            Ok(Some(p)) => p,
+            // Clean end of stream.
+            Ok(None) => break,
             // The demuxer reset (chained streams); the decoder must follow suit.
             Err(SymphError::ResetRequired) => {
                 decoder.reset();
@@ -225,26 +229,18 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
             Err(e) => return Err(e.to_string()),
         };
 
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
 
         match decoder.decode(&packet) {
             Ok(decoded) => {
-                let spec = *decoded.spec();
-                let capacity = decoded.capacity() as u64;
-                // Allocated once and reused; recreated only if the stream changes shape.
-                let needs_new = match &sample_buf {
-                    Some((_, s, c)) => *s != spec || *c < capacity,
-                    None => true,
-                };
-                if needs_new {
-                    sample_buf = Some((SampleBuffer::<f32>::new(capacity, spec), spec, capacity));
-                }
-                let (buf, _, _) = sample_buf.as_mut().expect("just populated above");
-                buf.copy_interleaved_ref(decoded);
+                let channels = decoded.spec().channels().count();
+                // Resizes `interleaved` to the frame count, so nothing carries
+                // over from the previous packet.
+                decoded.copy_to_vec_interleaved(&mut interleaved);
 
-                downmix_into(buf.samples(), spec.channels.count(), &mut mono)?;
+                downmix_into(&interleaved, channels, &mut mono)?;
                 resampler.push(&mono);
                 decoded_any = true;
             }
