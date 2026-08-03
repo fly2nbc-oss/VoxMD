@@ -36,10 +36,14 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustc --version && cargo clippy --version
 
+      # Its own cache bucket: this job compiles without `gpu-vulkan`, and a
+      # target dir without the Vulkan artifacts used to be what the build jobs
+      # restored — which made them recompile whisper.cpp from scratch.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: cpu-${{ runner.os }}
 
       - name: Install Linux system dependencies
         run: |
@@ -92,11 +96,13 @@ jobs:
       - name: Install Rust
         run: rustup show active-toolchain || rustup toolchain install
 
+      # Shared with the build jobs, which compile with the same feature: they
+      # restore this target dir instead of rebuilding whisper.cpp with Vulkan.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: vulkan
+          shared-key: vulkan-${{ runner.os }}
 
       - name: Install Linux system dependencies
         run: |
@@ -152,15 +158,22 @@ jobs:
       - name: Install Rust
         run: rustup show active-toolchain || rustup toolchain install
 
+      # A prebuilt binary. Compiling cargo-audit from source was almost the
+      # entire runtime of this job.
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: cargo audit
         working-directory: src-tauri
         run: cargo audit
 
+  # Gated on `check` only. Waiting for `vulkan` as well delayed every build by
+  # the length of the slowest gate (9m16s measured) although the builds
+  # themselves need nothing from it; both now run alongside each other.
   build:
-    needs: [check, vulkan]
+    needs: [check]
     strategy:
       fail-fast: false
       matrix:
@@ -201,6 +214,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Same bucket as the `vulkan` job, which compiles the same feature.
+          shared-key: vulkan-${{ runner.os }}
           # Windows builds to C:/cargo-target; caching target often exceeds GitHub's 10GB limit.
           cache-targets: ${{ matrix.platform != 'windows-latest' }}
 
@@ -239,8 +254,33 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Pull requests only need to know that it compiles and links; producing
+      # the installers costs about 90s on Windows and 125s on Linux. Pushes to
+      # main do bundle, so a break in the bundling still surfaces before a tag.
       - name: Build Tauri app (Vulkan)
-        run: npm run tauri -- build --features gpu-vulkan
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            npm run tauri -- build --features gpu-vulkan --no-bundle
+          else
+            npm run tauri -- build --features gpu-vulkan
+          fi
+
+      # Exercised here so a break in the script shows up on main rather than
+      # during a release. See the script header for what it fixes.
+      - name: Drop bundled Wayland libraries from the AppImage
+        if: matrix.platform == 'ubuntu-24.04' && github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "::error::No AppImage was produced; the bundle step must have changed."
+            exit 1
+          fi
+          for img in "${found[@]}"; do
+            bash scripts/fix-appimage-libs.sh "$img"
+          done
 
       - name: Upload Windows portable EXE (no installer)
         if: matrix.platform == 'windows-latest'

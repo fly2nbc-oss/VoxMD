@@ -49,8 +49,8 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 ## Quick Start
 
 1. [Download a release](https://github.com/fly2nbc-oss/VoxMD/releases/latest). Both platforms ship a **portable** build next to their installers:
-   - **Windows** — portable `VoxMD.exe` (no installer), or the `.msi` / NSIS setup `.exe`. [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC.
-   - **Linux** — portable `.AppImage` (`chmod +x`, then run; it carries its own WebKitGTK and GTK libraries), or the `.deb` / `.rpm`. The AppImage is built on Ubuntu 24.04 and needs glibc 2.39 or newer; on older distributions use a package or build from source.
+   - **Windows** — portable `VoxMD.exe` (no installer), or the NSIS setup `.exe`. [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC.
+   - **Linux** — portable `.AppImage` (`chmod +x`, then run; it carries its own WebKitGTK and GTK libraries), or the `.deb`. Use the AppImage on anything without `.deb` support — Arch, Manjaro, Fedora, openSUSE. It is built on Ubuntu 24.04 and needs glibc 2.39 or newer; on older distributions build from source.
 2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local model file).
 3. Optionally enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) under **Summary (LLM)** in Settings and press **Save**. No key? Enable Transcript in the toolbar; the summary is skipped automatically.
 4. Add **Files** (local audio) or a **Podcast** feed, optionally select entries, then press **Start**.
@@ -151,8 +151,8 @@ Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflo
 
 | Artifact | Description |
 |----------|-------------|
-| `SHA256SUMS-linux.txt` | Hashes for `.deb`, `.rpm`, `.AppImage` (if produced) |
-| `SHA256SUMS-windows.txt` | Hashes for `.msi` / installer outputs |
+| `SHA256SUMS-linux.txt` | Hashes for the `.deb` and the `.AppImage` |
+| `SHA256SUMS-windows.txt` | Hashes for the NSIS setup and the portable `VoxMD.exe` |
 
 ## Troubleshooting
 
@@ -161,7 +161,8 @@ Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflo
 - **A file is skipped with "exists"** — the target `.md` already exists; delete or rename it to re-process.
 - **No audio in the podcast folder** — press **Start** first (download happens during processing). If the trash toggle is active (red), audio is removed after a successful export; Markdown stays.
 - **GPU checkbox greyed out** — binary without `gpu-vulkan`, or Vulkan loader missing at runtime. The app still starts and runs on CPU.
-- **Linux AppImage fails silently** — bundling requires `linuxdeploy`; `.deb`/`.rpm` packages are unaffected.
+- **AppImage window opens but stays blank (1.0.6 and earlier)** — the bundled Wayland libraries were older than the host's, so the system's Mesa EGL could not load and WebKit gave up rendering (`Could not create default EGL display: EGL_BAD_PARAMETER`). It hit rolling distributions in particular: Arch, Manjaro, Fedora 41+, openSUSE Tumbleweed. Fixed in 1.0.7. On an older AppImage, run it as `LD_PRELOAD=/usr/lib/libwayland-client.so.0 ./VoxMD_*.AppImage`.
+- **Linux AppImage fails to build** — bundling requires `linuxdeploy`; the `.deb` is unaffected.
 
 ## Roadmap & Known Issues
 
