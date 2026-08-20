@@ -21,6 +21,17 @@ describe("mergeConfig", () => {
     expect(merged.apiModel).toBe(defaultConfig().apiModel);
     expect(merged.whisperModel).toBe("small");
     expect(merged.useGpu).toBe(false);
+    expect(merged.llmProvider).toBe("deepseek");
+    expect(merged.preventSleep).toBe(true);
+    expect(merged.diarizationEnabled).toBe(false);
+    expect(merged.dictationModel).toBe("small");
+  });
+
+  it("infers OpenRouter from a stored URL when provider is missing", () => {
+    const merged = mergeConfig({
+      apiBaseUrl: "https://openrouter.ai/api/v1",
+    } as never);
+    expect(merged.llmProvider).toBe("openrouter");
   });
 
   it("returns defaults for null/undefined", () => {

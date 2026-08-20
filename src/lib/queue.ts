@@ -7,7 +7,7 @@ import type { QueueItem } from "../types";
  * two lists stay identical, since the backend uses its copy to decide which feed
  * enclosures count as audio.
  */
-export const AUDIO_EXTENSIONS = ["mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus"];
+export const AUDIO_EXTENSIONS = ["mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus", "mka", "mkv", "aiff", "caf"];
 
 export function isAudioPath(p: string): boolean {
   const ext = p.split(".").pop()?.toLowerCase() ?? "";

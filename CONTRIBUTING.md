@@ -11,7 +11,8 @@ Thank you for your interest in VoxMD!
 ```bash
 # Debian/Ubuntu
 sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-  librsvg2-dev patchelf clang libclang-dev llvm-dev
+  librsvg2-dev patchelf clang libclang-dev llvm-dev cmake pkg-config \
+  libasound2-dev libdbus-1-dev libssl-dev g++
 ```
 
 ## Getting Started

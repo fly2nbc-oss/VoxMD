@@ -1,9 +1,9 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultConfig } from "../defaults";
-import { CONFIG_KEY, mergeConfig, STORE_FILE } from "../lib/configStore";
+import { CONFIG_KEY, mergeConfig, QUEUE_KEY, STORE_FILE } from "../lib/configStore";
 import { toMsg } from "../lib/jobs";
-import type { AppConfig } from "../types";
+import type { AppConfig, QueueItem } from "../types";
 
 export interface ConfigStore {
   config: AppConfig;
@@ -14,6 +14,8 @@ export interface ConfigStore {
   persist: (update: AppConfig | ((prev: AppConfig) => AppConfig)) => Promise<void>;
   /** Drop unsaved edits, e.g. when the settings drawer is dismissed. */
   revert: () => void;
+  loadQueue: () => Promise<unknown>;
+  saveQueue: (items: QueueItem[]) => Promise<void>;
   ready: boolean;
   loadError: string;
 }
@@ -73,5 +75,18 @@ export function useConfigStore(): ConfigStore {
     setConfigState(savedRef.current);
   }, []);
 
-  return { config, setConfig, persist, revert, ready, loadError };
+  const loadQueue = useCallback(async () => {
+    const store =
+      storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
+    return store.get(QUEUE_KEY);
+  }, []);
+
+  const saveQueue = useCallback(async (items: QueueItem[]) => {
+    const store =
+      storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
+    await store.set(QUEUE_KEY, items);
+    await store.save();
+  }, []);
+
+  return { config, setConfig, persist, revert, loadQueue, saveQueue, ready, loadError };
 }

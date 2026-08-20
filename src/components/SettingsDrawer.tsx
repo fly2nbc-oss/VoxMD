@@ -1,7 +1,17 @@
 import { Check, FolderOpen, Loader2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
 import { isSummarySystemLanguage, isTranscriptionAuto } from "../lib/configStore";
+import { toMsg } from "../lib/jobs";
+import { applyProvider, LLM_PROVIDER_PRESETS } from "../lib/llmProviders";
 import type { ThemeMode } from "../lib/theme";
-import type { AppConfig, WhisperModelInfo } from "../types";
+import type {
+  AppConfig,
+  LlmModelInfo,
+  LlmProvider,
+  MicrophoneInfo,
+  WhisperModelInfo,
+} from "../types";
 import { LanguagePicker } from "./LanguagePicker";
 import { Modal } from "./Modal";
 
@@ -21,7 +31,8 @@ interface Props {
   modelsLoading: boolean;
   clearingCache: boolean;
   onClearCache: () => void;
-  onPickModelFile: () => void;
+  onPickWhisperModelFile: () => void;
+  onPickDictationModelFile: () => void;
 
   detectedSystemSummaryLang: string;
   vulkanAvailable: boolean | null;
@@ -42,7 +53,8 @@ export function SettingsDrawer({
   modelsLoading,
   clearingCache,
   onClearCache,
-  onPickModelFile,
+  onPickWhisperModelFile,
+  onPickDictationModelFile,
   detectedSystemSummaryLang,
   vulkanAvailable,
   themeMode,
@@ -53,9 +65,92 @@ export function SettingsDrawer({
 
   const hasApiKey = config.apiKey.trim() !== "";
   const isPreset = modelInfos.some((m) => m.name === config.whisperModel);
-  // While the model list is loading everything looks "custom", which briefly
-  // rendered the custom-path field containing the preset name.
   const showCustomPath = !modelsLoading && !isPreset;
+  const dictationIsPreset = modelInfos.some((m) => m.name === config.dictationModel);
+  const showDictationCustom = !modelsLoading && !dictationIsPreset;
+  const urlLocked = config.llmProvider !== "custom";
+
+  const [llmModels, setLlmModels] = useState<LlmModelInfo[]>([]);
+  const [llmModelsLoading, setLlmModelsLoading] = useState(
+    () => config.apiKey.trim() !== "" && config.apiBaseUrl.trim() !== "",
+  );
+  const [verifying, setVerifying] = useState(false);
+  const [verifyMsg, setVerifyMsg] = useState("");
+  const [verifyOk, setVerifyOk] = useState<boolean | null>(null);
+  const [mics, setMics] = useState<MicrophoneInfo[]>([]);
+
+  const loadLlmModels = useCallback(async (cfg: AppConfig) => {
+    if (!cfg.apiKey.trim() || !cfg.apiBaseUrl.trim()) {
+      setLlmModels([]);
+      setLlmModelsLoading(false);
+      return;
+    }
+    setLlmModelsLoading(true);
+    try {
+      setLlmModels(await invoke<LlmModelInfo[]>("list_llm_models", { config: cfg }));
+    } catch {
+      setLlmModels([]);
+    } finally {
+      setLlmModelsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await invoke<MicrophoneInfo[]>("list_microphones");
+        if (!cancelled) setMics(list);
+      } catch {
+        if (!cancelled) setMics([]);
+      }
+      if (!config.apiKey.trim() || !config.apiBaseUrl.trim()) {
+        if (!cancelled) setLlmModelsLoading(false);
+        return;
+      }
+      try {
+        const models = await invoke<LlmModelInfo[]>("list_llm_models", { config });
+        if (!cancelled) setLlmModels(models);
+      } catch {
+        if (!cancelled) setLlmModels([]);
+      } finally {
+        if (!cancelled) setLlmModelsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Snapshot at drawer open; Verify / provider change refresh explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onProviderChange = (id: LlmProvider) => {
+    const next = applyProvider(config, id);
+    onConfigChange(next);
+    setVerifyMsg("");
+    setVerifyOk(null);
+    void loadLlmModels(next);
+  };
+
+  const verifyKey = async () => {
+    setVerifying(true);
+    setVerifyMsg("");
+    setVerifyOk(null);
+    try {
+      await invoke("verify_api_key", { config });
+      setVerifyOk(true);
+      setVerifyMsg("Key accepted.");
+      await loadLlmModels(config);
+    } catch (e) {
+      setVerifyOk(false);
+      setVerifyMsg(toMsg(e));
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const modelInList = llmModels.some((m) => m.id === config.apiModel);
+  const showModelSelect = config.llmProvider === "openrouter" || llmModels.length > 0;
 
   return (
     <Modal title="Settings" onClose={onClose} variant="drawer">
@@ -67,19 +162,55 @@ export function SettingsDrawer({
         </p>
 
         <div className="field">
+          <label className="field-label" htmlFor="llmProvider">
+            Provider
+          </label>
+          <select
+            id="llmProvider"
+            className="input"
+            value={config.llmProvider}
+            disabled={!config.includeSummary}
+            onChange={(e) => onProviderChange(e.target.value as LlmProvider)}
+          >
+            {LLM_PROVIDER_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <p className="field-hint">
+            Deepseek and OpenRouter fill the base URL. Custom leaves URL and model as free text.
+          </p>
+        </div>
+
+        <div className="field">
           <label className="field-label" htmlFor="apiKey">
             API key
           </label>
-          <input
-            id="apiKey"
-            className="input"
-            type="password"
-            autoComplete="off"
-            value={config.apiKey}
-            disabled={!config.includeSummary}
-            onChange={(e) => set("apiKey", e.target.value)}
-          />
-          {config.includeSummary && !hasApiKey ? (
+          <div className="input-with-button">
+            <input
+              id="apiKey"
+              className="input"
+              type="password"
+              autoComplete="off"
+              value={config.apiKey}
+              disabled={!config.includeSummary}
+              onChange={(e) => set("apiKey", e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn-secondary btn-sm nowrap"
+              disabled={!config.includeSummary || !hasApiKey || verifying}
+              onClick={() => void verifyKey()}
+              title="Check the key against the provider’s model list"
+            >
+              {verifying ? <Loader2 size={13} className="icon spin" aria-hidden /> : null}
+              {verifying ? "Checking…" : "Verify"}
+            </button>
+          </div>
+          {verifyMsg ? (
+            <p className={`field-hint${verifyOk === false ? " field-hint-warn" : ""}`}>{verifyMsg}</p>
+          ) : config.includeSummary && !hasApiKey ? (
             <p className="field-hint field-hint-warn">Enter a key to generate summaries.</p>
           ) : !config.includeSummary ? (
             <p className="field-hint">Summary is off in the toolbar — these fields are unused.</p>
@@ -95,11 +226,12 @@ export function SettingsDrawer({
             className="input"
             placeholder="https://api.deepseek.com"
             value={config.apiBaseUrl}
-            disabled={!config.includeSummary}
+            disabled={!config.includeSummary || urlLocked}
             onChange={(e) => set("apiBaseUrl", e.target.value)}
           />
           <p className="field-hint">
-            Endpoint root, without <code>/v1/chat/completions</code>.
+            Endpoint root, without <code>/chat/completions</code>. OpenRouter needs{" "}
+            <code>/api/v1</code>.
           </p>
         </div>
 
@@ -107,15 +239,54 @@ export function SettingsDrawer({
           <label className="field-label" htmlFor="model">
             Model
           </label>
-          <input
-            id="model"
-            className="input"
-            placeholder="deepseek-chat"
-            value={config.apiModel}
-            disabled={!config.includeSummary}
-            onChange={(e) => set("apiModel", e.target.value)}
-          />
-          <p className="field-hint">Model id as expected by that provider.</p>
+          {showModelSelect ? (
+            <select
+              id="model"
+              className="input"
+              value={modelInList ? config.apiModel : ""}
+              disabled={!config.includeSummary || llmModelsLoading}
+              onChange={(e) => {
+                if (e.target.value) set("apiModel", e.target.value);
+              }}
+            >
+              {!modelInList ? (
+                <option value="">
+                  {config.apiModel ? `Current: ${config.apiModel}` : "Select a model…"}
+                </option>
+              ) : null}
+              {llmModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="model"
+              className="input"
+              placeholder="deepseek-chat"
+              value={config.apiModel}
+              disabled={!config.includeSummary}
+              onChange={(e) => set("apiModel", e.target.value)}
+            />
+          )}
+          {config.llmProvider === "custom" && showModelSelect ? (
+            <input
+              className="input custom-model-row"
+              placeholder="Model id"
+              value={config.apiModel}
+              disabled={!config.includeSummary}
+              onChange={(e) => set("apiModel", e.target.value)}
+              aria-label="Model id"
+            />
+          ) : null}
+          <p className="field-hint">
+            {llmModelsLoading
+              ? "Loading models…"
+              : config.llmProvider === "openrouter"
+                ? "Chat models from OpenRouter, alphabetically. Verify the key to refresh the list."
+                : "Model id as expected by that provider."}
+          </p>
         </div>
 
         <div className="field">
@@ -197,7 +368,7 @@ export function SettingsDrawer({
                 type="button"
                 className="btn-secondary btn-sm"
                 title="Choose a local .bin or .gguf model file"
-                onClick={onPickModelFile}
+                onClick={onPickWhisperModelFile}
               >
                 <FolderOpen size={16} aria-hidden />
                 <span>Choose…</span>
@@ -261,6 +432,131 @@ export function SettingsDrawer({
             runs on CPU.
           </p>
         </div>
+
+        <div className="field">
+          <span className="field-label">While processing</span>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={config.preventSleep}
+              onChange={(e) => set("preventSleep", e.target.checked)}
+            />
+            <span>Prevent the computer from sleeping</span>
+          </label>
+          <p className="field-hint">
+            Holds an idle-inhibit lock for the duration of a batch. Windows may still sleep on
+            battery (Modern Standby). A failure is logged and the batch continues.
+          </p>
+        </div>
+
+        <div className="field">
+          <span className="field-label">Speakers</span>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={config.diarizationEnabled}
+              onChange={(e) => set("diarizationEnabled", e.target.checked)}
+            />
+            <span>Label speakers in the transcript</span>
+          </label>
+          <label className="field-label field-follow" htmlFor="maxSpeakers">
+            Max speakers (0 = auto)
+          </label>
+          <input
+            id="maxSpeakers"
+            className="input"
+            type="number"
+            min={0}
+            max={20}
+            value={config.maxSpeakers}
+            disabled={!config.diarizationEnabled}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              set("maxSpeakers", Number.isFinite(n) ? Math.max(0, Math.min(20, Math.round(n))) : 0);
+            }}
+          />
+          <p className="field-hint">
+            Downloads two small ONNX models (~32 MB) on first use into{" "}
+            <code>~/.cache/voxmd/diarize/</code>. Each transcript line becomes{" "}
+            <code>[HH:MM:SS] **Speaker N:** …</code>. If diarization fails, the unlabeled transcript
+            is kept.
+          </p>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h2 className="settings-section-title">Dictation</h2>
+        <p className="field-hint">
+          Live microphone transcription uses its own Whisper model so the batch queue can keep a
+          larger one. Dictation and a running batch cannot overlap.
+        </p>
+
+        <div className="field">
+          <label className="field-label" htmlFor="dmodel">
+            Dictation model
+          </label>
+          <select
+            id="dmodel"
+            className="input"
+            value={dictationIsPreset ? config.dictationModel : CUSTOM_MODEL}
+            disabled={modelsLoading}
+            onChange={(e) => {
+              if (e.target.value === CUSTOM_MODEL) {
+                if (dictationIsPreset) set("dictationModel", "");
+                return;
+              }
+              set("dictationModel", e.target.value);
+            }}
+          >
+            {modelInfos.map((m) => (
+              <option key={m.name} value={m.name}>
+                {m.name} · {m.sizeHint}
+                {m.cached ? " ✓" : ""}
+              </option>
+            ))}
+            <option value={CUSTOM_MODEL}>Custom path…</option>
+          </select>
+          {showDictationCustom ? (
+            <div className="input-with-button custom-model-row">
+              <input
+                className="input"
+                placeholder="/absolute/path/to/model.bin"
+                value={config.dictationModel}
+                onChange={(e) => set("dictationModel", e.target.value)}
+                aria-label="Path to a local dictation Whisper model"
+              />
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                title="Choose a local .bin or .gguf model file"
+                onClick={onPickDictationModelFile}
+              >
+                <FolderOpen size={16} aria-hidden />
+                <span>Choose…</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="microphone">
+            Default microphone
+          </label>
+          <select
+            id="microphone"
+            className="input"
+            value={config.microphoneName}
+            onChange={(e) => set("microphoneName", e.target.value)}
+          >
+            <option value="">System default</option>
+            {mics.map((m) => (
+              <option key={m.name} value={m.name}>
+                {m.name}
+                {m.isDefault ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
       </section>
 
       <section className="settings-section">
@@ -278,6 +574,10 @@ export function SettingsDrawer({
             </label>
           ))}
         </div>
+        <p className="field-hint shortcuts-hint">
+          Shortcuts: F5 start / record, Esc cancel / stop, Ctrl+O files, Ctrl+, settings, Ctrl+1
+          queue, Ctrl+2 dictation. Ignored while typing in a field.
+        </p>
       </section>
 
       {saveError ? <p className="form-error">{saveError}</p> : null}

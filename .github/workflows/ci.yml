@@ -58,7 +58,13 @@ jobs:
             llvm-dev \
             libvulkan-dev \
             vulkan-tools \
-            glslc
+            glslc \
+            cmake \
+            pkg-config \
+            libasound2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            g++
 
       - name: Install frontend dependencies
         run: npm ci
@@ -120,7 +126,13 @@ jobs:
             llvm-dev \
             libvulkan-dev \
             vulkan-tools \
-            glslc
+            glslc \
+            cmake \
+            pkg-config \
+            libasound2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            g++
 
       # Releases are built with this feature, but nothing used to compile or test
       # it before the (much slower) platform builds, so a break in the Vulkan
@@ -236,7 +248,13 @@ jobs:
             llvm-dev \
             libvulkan-dev \
             vulkan-tools \
-            glslc
+            glslc \
+            cmake \
+            pkg-config \
+            libasound2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            g++
 
       - name: Set VULKAN_SDK (Linux)
         if: matrix.platform == 'ubuntu-24.04'

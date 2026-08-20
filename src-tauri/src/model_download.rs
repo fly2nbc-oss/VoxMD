@@ -161,7 +161,7 @@ pub async fn resolve_model(
     Ok(dest)
 }
 
-async fn download_file(
+pub(crate) async fn download_file(
     url: &str,
     dest: &Path,
     on_progress: impl Fn(u64, u64),

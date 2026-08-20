@@ -861,3 +861,145 @@ button:focus-visible,
 .muted-text {
   color: var(--muted);
 }
+
+.mode-switch {
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-muted);
+}
+
+.mode-switch-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.mode-switch-btn.is-active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.mode-switch-btn:hover:not(:disabled):not(.is-active) {
+  color: var(--text);
+}
+
+.app-bar-mode-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.field-follow {
+  margin-top: 8px;
+}
+
+.shortcuts-hint {
+  margin-top: 10px;
+}
+
+.dictation {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  overflow: auto;
+}
+
+.dictation-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-sm);
+}
+
+.dictation-mic {
+  flex: 1;
+  min-width: 180px;
+}
+
+.dictation-meter {
+  height: 8px;
+  width: 120px;
+  background: var(--line-soft);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.dictation-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: width 0.12s ease;
+}
+
+.dictation-stage {
+  margin: 0;
+}
+
+.dictation-editor {
+  flex: 1;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dictation-committed {
+  flex: 1;
+  min-height: 140px;
+  padding: var(--space-sm);
+  resize: none;
+  font-family: var(--font-ui);
+  line-height: 1.45;
+}
+
+.dictation-partial {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.dictation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dictation-translate {
+  min-width: 120px;
+}
+
+.dictation-proposal {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+  background: var(--surface-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dictation-proposal-text {
+  min-height: 80px;
+  resize: vertical;
+  padding: var(--space-sm);
+}
+
+.dictation-proposal-actions {
+  display: flex;
+  gap: 6px;
+}

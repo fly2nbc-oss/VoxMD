@@ -11,6 +11,9 @@ use symphonia::core::meta::MetadataOptions;
 
 const TARGET_RATE: u32 = 16000;
 
+/// Sample rate Whisper (and the diarizer) expect after decoding.
+pub const SAMPLE_RATE: u32 = TARGET_RATE;
+
 /// Anti-alias cutoff, a little under the 8 kHz output Nyquist to leave the
 /// filter a transition band. Speech energy above this is mostly fricative
 /// detail, which matters far less than keeping folded content out of the band.
@@ -152,7 +155,11 @@ impl Resampler {
 
 /// Downmixes an interleaved buffer to mono, reusing `mono` to avoid allocating
 /// per packet (a long file decodes into hundreds of thousands of packets).
-fn downmix_into(samples: &[f32], channels: usize, mono: &mut Vec<f32>) -> Result<(), String> {
+pub(crate) fn downmix_into(
+    samples: &[f32],
+    channels: usize,
+    mono: &mut Vec<f32>,
+) -> Result<(), String> {
     if channels == 0 {
         return Err("No audio channels".to_string());
     }
@@ -171,6 +178,19 @@ fn downmix_into(samples: &[f32], channels: usize, mono: &mut Vec<f32>) -> Result
         mono.push(sum / channels as f32);
     }
     Ok(())
+}
+
+/// Resamples a mono buffer to 16 kHz for Whisper / the diarizer.
+pub fn resample_mono_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
+    if from_rate == 0 || samples.is_empty() {
+        return Vec::new();
+    }
+    if from_rate == TARGET_RATE {
+        return samples.to_vec();
+    }
+    let mut r = Resampler::new(from_rate, TARGET_RATE);
+    r.push(samples);
+    r.finish()
 }
 
 /// Reads audio with Symphonia and returns mono f32 @ 16 kHz for whisper.cpp.

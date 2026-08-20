@@ -6,6 +6,9 @@ pub struct AppConfig {
     pub api_key: String,
     pub api_base_url: String,
     pub api_model: String,
+    /// `deepseek` | `openrouter` | `custom`. Unknown/missing values mean Deepseek.
+    #[serde(default = "default_llm_provider")]
+    pub llm_provider: String,
     /// Whisper model: name ("turbo", "large-v3", "medium", "small", "base", "tiny")
     /// or absolute path to a local .bin / .gguf file.
     /// Aliases: whisperModelPath (old store key) → whisperModel.
@@ -32,6 +35,21 @@ pub struct AppConfig {
     /// Write the raw Whisper transcript into the Markdown output.
     #[serde(default = "default_true")]
     pub include_transcript: bool,
+    /// Keep the machine from idle-sleeping while a batch runs.
+    #[serde(default = "default_true")]
+    pub prevent_sleep: bool,
+    /// Run pyannote speaker diarization after Whisper and label transcript lines.
+    #[serde(default)]
+    pub diarization_enabled: bool,
+    /// 0 = automatic speaker count; otherwise a cap passed to the embedding manager.
+    #[serde(default)]
+    pub max_speakers: u8,
+    /// Whisper preset or path used only for live dictation.
+    #[serde(default = "default_dictation_model")]
+    pub dictation_model: String,
+    /// Empty = system default input device.
+    #[serde(default)]
+    pub microphone_name: String,
     /// Last used output folder for podcast episode Markdown files (frontend convenience).
     #[serde(default)]
     pub podcast_output_dir: String,
@@ -47,6 +65,14 @@ fn default_language() -> String {
 
 fn default_summary_language() -> String {
     "system".to_string()
+}
+
+fn default_llm_provider() -> String {
+    "deepseek".to_string()
+}
+
+fn default_dictation_model() -> String {
+    "small".to_string()
 }
 
 /// Normalize locale string to ISO 639-1 (two lowercase letters).
@@ -84,6 +110,7 @@ impl Default for AppConfig {
             api_key: String::new(),
             api_base_url: "https://api.deepseek.com".to_string(),
             api_model: "deepseek-v4-pro".to_string(),
+            llm_provider: default_llm_provider(),
             whisper_model: "turbo".to_string(),
             language: default_language(),
             summary_language: default_summary_language(),
@@ -92,6 +119,11 @@ impl Default for AppConfig {
             include_meta: true,
             include_summary: true,
             include_transcript: true,
+            prevent_sleep: true,
+            diarization_enabled: false,
+            max_speakers: 0,
+            dictation_model: default_dictation_model(),
+            microphone_name: String::new(),
             podcast_output_dir: String::new(),
         }
     }
@@ -220,6 +252,17 @@ mod tests {
         assert!(cfg.include_summary);
         assert!(!cfg.summary_enabled());
         assert!(cfg.validate_for_run().is_ok());
+    }
+
+    #[test]
+    fn defaults_cover_the_new_settings() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.llm_provider, "deepseek");
+        assert!(cfg.prevent_sleep);
+        assert!(!cfg.diarization_enabled);
+        assert_eq!(cfg.max_speakers, 0);
+        assert_eq!(cfg.dictation_model, "small");
+        assert!(cfg.microphone_name.is_empty());
     }
 
     #[test]

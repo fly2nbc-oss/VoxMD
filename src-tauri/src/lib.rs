@@ -1,5 +1,7 @@
 mod audio;
 mod config;
+mod diarize;
+mod dictation;
 mod llm;
 mod meta;
 mod model_download;
@@ -8,6 +10,8 @@ mod podcast;
 mod vulkan_runtime;
 
 use config::AppConfig;
+use dictation::MicrophoneInfo;
+use llm::LlmModelInfo;
 use model_download::ModelInfo;
 use podcast::{EpisodeInfo, QueueItem};
 use serde::Serialize;
@@ -75,18 +79,67 @@ async fn fetch_podcast_feed(url: String) -> Result<Vec<EpisodeInfo>, String> {
 }
 
 #[tauri::command]
+async fn list_llm_models(config: AppConfig) -> Result<Vec<LlmModelInfo>, String> {
+    llm::list_llm_models(&config).await
+}
+
+#[tauri::command]
+async fn verify_api_key(config: AppConfig) -> Result<(), String> {
+    llm::verify_api_key(&config).await
+}
+
+#[tauri::command]
+async fn improve_text(config: AppConfig, text: String) -> Result<String, String> {
+    llm::improve_text(&config, &text).await
+}
+
+#[tauri::command]
+async fn translate_text(config: AppConfig, text: String, target: String) -> Result<String, String> {
+    llm::translate_text(&config, &text, &target).await
+}
+
+#[tauri::command]
+fn list_microphones() -> Result<Vec<MicrophoneInfo>, String> {
+    dictation::list_microphones()
+}
+
+#[tauri::command]
+async fn start_dictation(app: tauri::AppHandle, config: AppConfig) -> Result<(), String> {
+    dictation::start(app, config).await
+}
+
+#[tauri::command]
+fn stop_dictation() {
+    dictation::stop();
+}
+
+#[tauri::command]
+fn dictation_state() -> bool {
+    dictation::is_running()
+}
+
+#[tauri::command]
+fn append_to_batch(items: Vec<QueueItem>) -> Result<usize, String> {
+    pipeline::append_to_batch(items)
+}
+
+#[tauri::command]
 async fn start_transcription(
     app: tauri::AppHandle,
     items: Vec<QueueItem>,
     config: AppConfig,
 ) -> Result<(), String> {
     config.validate_for_run()?;
+    if dictation::is_running() {
+        return Err("Stop dictation before starting a batch.".to_string());
+    }
     // Claim the slot before returning, so the frontend cannot enable its Cancel
     // button while the flag is still unset. `run_batch` releases it via its guard
     // and reports the outcome through the `batch_complete` event.
     pipeline::begin_batch()?;
+    pipeline::enqueue_items(items);
     tokio::spawn(async move {
-        pipeline::run_batch(app, items, config).await;
+        pipeline::run_batch(app, config).await;
     });
     Ok(())
 }
@@ -100,6 +153,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_transcription,
             cancel_transcription,
+            append_to_batch,
             processing_state,
             vulkan_status,
             list_whisper_models,
@@ -107,6 +161,14 @@ pub fn run() {
             clear_whisper_cache,
             system_summary_language,
             fetch_podcast_feed,
+            list_llm_models,
+            verify_api_key,
+            improve_text,
+            translate_text,
+            list_microphones,
+            start_dictation,
+            stop_dictation,
+            dictation_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running VoxMD");

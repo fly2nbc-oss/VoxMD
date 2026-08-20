@@ -36,8 +36,8 @@ async-openai = { version = "0.41", default-features = false, features = [
     "chat-completion",
 ] }
 lofty = "0.24"
-# Formats claimed in README: MP3, M4A/MP4, WAV, OGG, FLAC, WebM (+ PCM).
-# `all` also pulls CAF/AIFF/ALAC/ADPCM and is unnecessary attack surface.
+# Formats claimed in README: MP3, M4A/MP4, WAV, OGG, FLAC, WebM/MKV, AIFF, CAF (+ PCM).
+# `all` also pulls ALAC/ADPCM and is unnecessary attack surface.
 symphonia = { version = "0.6", default-features = false, features = [
     "mp3",
     "aac",
@@ -47,10 +47,20 @@ symphonia = { version = "0.6", default-features = false, features = [
     "flac",
     "vorbis",
     "mkv",
+    "aiff",
+    "caf",
     "pcm",
     "opt-simd",
     "all-meta",
 ] }
+# Always-on platform backends (D-Bus inhibit on Linux, SetThreadExecutionState on Windows).
+keepawake = "0.6"
+cpal = "0.15"
+pyannote-rs = "0.3"
+# pyannote-rs 0.3.4 declares `ort = "2.0.0-rc.10"`, which also matches later
+# rcs. rc.13 pulled a second `ndarray` and SessionBuilder is not Send/Sync, so
+# the crate does not compile. Pin the version it was written against.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray"] }
 # 0.13 renamed the `rustls-tls` feature to `rustls`. Kept in lockstep with
 # async-openai so the binary links one HTTP stack, not two.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }

@@ -17,6 +17,8 @@ export function badgeForStage(stage: string): { className: string; label: string
       return { className: "badge-active", label: "Download" };
     case "whisper":
       return { className: "badge-active", label: "Whisper" };
+    case "diarize":
+      return { className: "badge-active", label: "Speakers" };
     case "llm":
       return { className: "badge-active", label: "LLM" };
     case "queued":
@@ -38,6 +40,8 @@ export function detailsForRow(row: JobRow): string {
       return row.whisperPct != null && row.whisperPct > 0
         ? `Transcribing… ${row.whisperPct}%`
         : "Transcribing…";
+    case "diarize":
+      return row.message ?? "Separating speakers…";
     case "llm":
       return row.message ?? "Summary…";
     default:

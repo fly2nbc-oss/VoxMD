@@ -165,27 +165,250 @@ pub fn fmt_ts(seconds: f32) -> String {
     format!("[{h:02}:{m:02}:{s:02}]")
 }
 
-pub fn segments_to_raw_text(state: &whisper_rs::WhisperState) -> Result<String, String> {
+/// One Whisper segment with timestamps in seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptLine {
+    pub start: f32,
+    pub end: f32,
+    pub text: String,
+}
+
+pub fn lines_from_state(state: &whisper_rs::WhisperState) -> Result<Vec<TranscriptLine>, String> {
     let n = state.full_n_segments();
     let mut lines = Vec::new();
     for i in 0..n {
         let Some(seg) = state.get_segment(i) else {
             continue;
         };
-        let t0 = seg.start_timestamp() as f32 / 100.0;
+        let start = seg.start_timestamp() as f32 / 100.0;
+        let end = seg.end_timestamp() as f32 / 100.0;
         let text = seg.to_str_lossy().unwrap_or_default().trim().to_string();
         if text.is_empty() {
             continue;
         }
-        lines.push(format!("{} {text}", fmt_ts(t0)));
+        lines.push(TranscriptLine { start, end, text });
     }
-    Ok(lines.join("\n"))
+    Ok(lines)
+}
+
+/// Overlap in seconds between `[a0, a1]` and `[b0, b1]`.
+pub fn interval_overlap(a0: f32, a1: f32, b0: f32, b1: f32) -> f32 {
+    (a1.min(b1) - a0.max(b0)).max(0.0)
+}
+
+/// `speakers[i]` is a 1-based speaker index for `lines[i]`, or `None` to leave unlabeled.
+pub fn format_transcript(lines: &[TranscriptLine], speakers: &[Option<usize>]) -> String {
+    let mut out = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let speaker = speakers.get(i).copied().flatten();
+        match speaker {
+            Some(n) if n > 0 => out.push(format!(
+                "{} **Speaker {n}:** {}",
+                fmt_ts(line.start),
+                line.text
+            )),
+            _ => out.push(format!("{} {}", fmt_ts(line.start), line.text)),
+        }
+    }
+    out.join("\n")
+}
+
+/// Assign each Whisper line the speaker whose turn overlaps it the most.
+pub fn speakers_for_lines(
+    lines: &[TranscriptLine],
+    turns: &[(f32, f32, usize)],
+) -> Vec<Option<usize>> {
+    lines
+        .iter()
+        .map(|line| {
+            let mut best: Option<(f32, usize)> = None;
+            for &(start, end, speaker) in turns {
+                let ov = interval_overlap(line.start, line.end, start, end);
+                if ov <= 0.0 {
+                    continue;
+                }
+                if best.is_none_or(|(best_ov, _)| ov > best_ov) {
+                    best = Some((ov, speaker));
+                }
+            }
+            best.map(|(_, n)| n)
+        })
+        .collect()
+}
+
+fn improve_system_prompt() -> &'static str {
+    "You are an expert editor for speech-to-text transcripts. Correct transcription errors, punctuation, grammar and sentence structure. Check every sentence for completeness and logic and fix problems. Rephrase slightly where needed for clarity, but preserve the meaning, the tone and the ORIGINAL LANGUAGE of the text. Return ONLY the corrected text, without comments, explanations or markdown."
+}
+
+fn translate_system_prompt(target: &str) -> String {
+    format!(
+        "You are a professional translator. Translate the user's text into {target}. Preserve meaning, tone and formatting. Return ONLY the translation, without comments or explanations."
+    )
+}
+
+pub async fn improve_text(cfg: &AppConfig, text: &str) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("No text to improve.".to_string());
+    }
+    if cfg.api_key.trim().is_empty() {
+        return Err("API key missing.".to_string());
+    }
+    let client = make_client(cfg);
+    call_llm(
+        &client,
+        &cfg.api_model,
+        SUMMARY_TEMPERATURE,
+        SUMMARY_MAX_TOKENS,
+        improve_system_prompt(),
+        trimmed,
+    )
+    .await
+}
+
+pub async fn translate_text(cfg: &AppConfig, text: &str, target: &str) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("No text to translate.".to_string());
+    }
+    let target = target.trim();
+    if target.is_empty() {
+        return Err("Target language missing.".to_string());
+    }
+    if cfg.api_key.trim().is_empty() {
+        return Err("API key missing.".to_string());
+    }
+    let client = make_client(cfg);
+    let system = translate_system_prompt(target);
+    call_llm(
+        &client,
+        &cfg.api_model,
+        SUMMARY_TEMPERATURE,
+        SUMMARY_MAX_TOKENS,
+        &system,
+        trimmed,
+    )
+    .await
+}
+
+fn api_base(cfg: &AppConfig) -> String {
+    cfg.api_base_url.trim().trim_end_matches('/').to_string()
+}
+
+fn llm_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent(crate::podcast::USER_AGENT)
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client: {e}"))
+}
+
+fn models_url(cfg: &AppConfig) -> String {
+    format!("{}/models", api_base(cfg))
+}
+
+pub async fn verify_api_key(cfg: &AppConfig) -> Result<(), String> {
+    let key = cfg.api_key.trim();
+    if key.is_empty() {
+        return Err("API key missing.".to_string());
+    }
+    let base = api_base(cfg);
+    if base.is_empty() {
+        return Err("API base URL missing.".to_string());
+    }
+    let client = llm_http_client()?;
+    let resp = client
+        .get(models_url(cfg))
+        .header("Authorization", format!("Bearer {key}"))
+        .header("HTTP-Referer", "https://github.com/fly2nbc-oss/VoxMD")
+        .header("X-Title", "VoxMD")
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach the API: {e}"))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Key rejected (HTTP {}).", resp.status().as_u16()))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmModelInfo {
+    pub id: String,
+}
+
+pub async fn list_llm_models(cfg: &AppConfig) -> Result<Vec<LlmModelInfo>, String> {
+    let key = cfg.api_key.trim();
+    if key.is_empty() {
+        return Ok(Vec::new());
+    }
+    let base = api_base(cfg);
+    if base.is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = llm_http_client()?;
+    let resp = client
+        .get(models_url(cfg))
+        .header("Authorization", format!("Bearer {key}"))
+        .header("HTTP-Referer", "https://github.com/fly2nbc-oss/VoxMD")
+        .header("X-Title", "VoxMD")
+        .send()
+        .await
+        .map_err(|e| format!("Could not list models: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Model list failed (HTTP {}).",
+            resp.status().as_u16()
+        ));
+    }
+    let body = resp.text().await.map_err(|e| format!("Read body: {e}"))?;
+    Ok(parse_model_ids(&body))
+}
+
+fn parse_model_ids(body: &str) -> Vec<LlmModelInfo> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let arr = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .or_else(|| v.as_array());
+    let Some(arr) = arr else {
+        return Vec::new();
+    };
+    let skip = regex_skip_model();
+    let mut ids: Vec<String> = arr
+        .iter()
+        .filter_map(|m| m.get("id").and_then(|id| id.as_str()))
+        .filter(|id| !skip(id))
+        .map(|id| id.to_string())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.into_iter().map(|id| LlmModelInfo { id }).collect()
+}
+
+fn regex_skip_model() -> impl Fn(&str) -> bool {
+    |id: &str| {
+        let l = id.to_ascii_lowercase();
+        l.contains("embed")
+            || l.contains("whisper")
+            || l.contains("tts")
+            || l.contains("moderation")
+            || l.contains("rerank")
+            || l.contains("image")
+            || l.contains("video")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        fmt_ts, summary_system_prompt, transcript_truncated_for_summary, SUMMARY_MAX_INPUT_CHARS,
+        fmt_ts, format_transcript, interval_overlap, parse_model_ids, speakers_for_lines,
+        summary_system_prompt, transcript_truncated_for_summary, TranscriptLine,
+        SUMMARY_MAX_INPUT_CHARS,
     };
 
     #[test]
@@ -208,5 +431,50 @@ mod tests {
         assert!(!transcript_truncated_for_summary("short"));
         let over = "a".repeat(SUMMARY_MAX_INPUT_CHARS + 1);
         assert!(transcript_truncated_for_summary(&over));
+    }
+
+    #[test]
+    fn format_transcript_labels_speakers() {
+        let lines = vec![
+            TranscriptLine {
+                start: 0.0,
+                end: 1.0,
+                text: "hello".into(),
+            },
+            TranscriptLine {
+                start: 1.0,
+                end: 2.0,
+                text: "there".into(),
+            },
+        ];
+        let labeled = format_transcript(&lines, &[Some(1), Some(2)]);
+        assert_eq!(
+            labeled,
+            "[00:00:00] **Speaker 1:** hello\n[00:00:01] **Speaker 2:** there"
+        );
+        let raw = format_transcript(&lines, &[]);
+        assert_eq!(raw, "[00:00:00] hello\n[00:00:01] there");
+    }
+
+    #[test]
+    fn speaker_assignment_uses_largest_overlap() {
+        let lines = [TranscriptLine {
+            start: 1.0,
+            end: 3.0,
+            text: "hi".into(),
+        }];
+        let turns = [(0.0, 1.5, 1), (1.4, 4.0, 2)];
+        let assigned = speakers_for_lines(&lines, &turns);
+        assert_eq!(assigned, vec![Some(2)]);
+        assert!(interval_overlap(0.0, 1.0, 2.0, 3.0) == 0.0);
+    }
+
+    #[test]
+    fn parse_openrouter_model_list_skips_embeddings() {
+        let body = r#"{"data":[{"id":"google/gemini-2.5-flash"},{"id":"openai/text-embedding-3-small"},{"id":"anthropic/claude-sonnet-4"}]}"#;
+        let ids: Vec<_> = parse_model_ids(body).into_iter().map(|m| m.id).collect();
+        assert!(ids.contains(&"google/gemini-2.5-flash".to_string()));
+        assert!(ids.contains(&"anthropic/claude-sonnet-4".to_string()));
+        assert!(!ids.iter().any(|id| id.contains("embed")));
     }
 }

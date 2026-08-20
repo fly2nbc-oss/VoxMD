@@ -43,6 +43,8 @@ describe("badgeForStage", () => {
     expect(badgeForStage("done").label).toBe("Done");
     expect(badgeForStage("error").className).toBe("badge-error");
     expect(badgeForStage("whisper").label).toBe("Whisper");
+    expect(badgeForStage("diarize").label).toBe("Speakers");
+    expect(badgeForStage("diarize").className).toBe("badge-active");
   });
 });
 
@@ -51,5 +53,6 @@ describe("detailsForRow", () => {
     expect(detailsForRow(row({ stage: "download", downloadPct: 40 }))).toContain("40%");
     expect(detailsForRow(row({ stage: "whisper", whisperPct: 12 }))).toContain("12%");
     expect(detailsForRow(row({ stage: "queued" }))).toContain("Waiting");
+    expect(detailsForRow(row({ stage: "diarize" }))).toContain("Separating");
   });
 });

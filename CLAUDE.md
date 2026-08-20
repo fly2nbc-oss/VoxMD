@@ -35,33 +35,33 @@ CI (`.github/workflows/ci.yml`) runs a Linux lint/test gate (eslint, Vitest, tsc
 
 `pipeline.rs::run_batch` is the heart of the app. It runs **two concurrent tasks** connected by an mpsc channel of **capacity 1**:
 
-- **Whisper task** (`spawn_blocking`): owns a single `WhisperContext`, processes queue items sequentially. For podcast items it downloads the episode into the chosen **output folder** (`podcast::download_to_file_blocking` → `meta::get_audio_path_for_episode`, same stem as the `.md`, stage `download`), then transcribes and sends each `TranscribedJob` into the channel. If the audio file already exists, download is skipped.
+- **Whisper task** (`spawn_blocking`): owns a single `WhisperContext`, pops items from a process-wide `PENDING` deque. For podcast items it downloads the episode into the chosen **output folder** (`podcast::download_to_file_blocking` → `meta::get_audio_path_for_episode`, same stem as the `.md`, stage `download`), then transcribes and sends each `TranscribedJob` into the channel. If the audio file already exists, download is skipped. Audio is decoded once (`decode_file_to_mono_16k`) and reused for optional diarization (stage `diarize`). The loop stays alive while the LLM still has a job so `append_to_batch` is not lost.
 - **LLM task** (`tokio::spawn`): receives jobs, optionally runs the summary call, assembles the `.md` (meta block / summary / transcript per config toggles), writes it, and optionally deletes **audio only** (`local_audio`) if `delete_source_after_success` is set — **never** the Markdown.
 
-Channel capacity 1 is the invariant: **at most one Whisper job and one LLM job in flight at once**. While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more. Don't widen the channel without understanding this contract (single `WhisperContext`, memory, and ordering all depend on it).
+Channel capacity 1 is the invariant: **at most one Whisper job and one LLM job in flight at once**. While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more. Don't widen the channel without understanding this contract (single `WhisperContext`, memory, and ordering all depend on it). `total` on `overall` progress is reread from `BATCH_TOTAL` because the deque can grow.
 
-Concurrency control uses two global atomics: `PROCESSING` (guards against double-start via `compare_exchange`) and `CANCEL_REQUESTED` (cooperative cancel, checked at task boundaries — there is **no hard mid-inference or mid-download cancellation**). Both are reset on completion.
+Concurrency control uses two global atomics: `PROCESSING` (guards against double-start via `compare_exchange`) and `CANCEL_REQUESTED` (cooperative cancel, checked at task boundaries — there is **no hard mid-inference or mid-download cancellation**). Dictation (`DICTATING`) and a batch are mutually exclusive. Both batch flags are reset on completion. `keepawake` holds an idle-inhibit lock while `prevent_sleep` is set.
 
 ### Queue items: local files vs. podcast episodes
 
 The queue is `Vec<QueueItem>` (defined in `podcast.rs`, mirrored in `src/types.ts`): `{ id, kind: "local"|"podcast", source, displayName, episode? }`. `id` is the local path or episode audio URL and keys both the frontend list and `job_progress` events (payload field is still named `path`). Podcast items carry `EpisodeMeta` (feed title, episode title, date, link, `outputDir`). `prepare_work_item` resolves each item to a `WorkItem` with `md_path` and `local_audio` — local files write `.md` next to the audio; episodes use `get_md_path_for_episode` / `get_audio_path_for_episode` under `outputDir`.
 
-Frontend also persists `podcastRecents` (up to 10 `{ feedUrl, outputDir, feedTitle? }` pairs) in the same settings store for the Podcast dialog.
+Frontend also persists `podcastRecents` (up to 10 `{ feedUrl, outputDir, feedTitle? }` pairs) and unfinished `queueItems` in the same settings store. Completed (`done`) rows are not saved.
 
 ### Frontend ↔ backend contract
 
 The only channel between sides is Tauri IPC. Two directions:
 
-- **Commands** (`invoke`): registered in `lib.rs::run()` via `generate_handler!`. Key ones: `start_transcription` (takes `items: Vec<QueueItem>`), `cancel_transcription`, `fetch_podcast_feed`, `list_whisper_models`, `clear_whisper_cache`, `vulkan_status`, `system_summary_language`.
-- **Events** (`app.emit` → `listen` in `App.tsx`): `job_progress` (stages `queued/download/whisper/llm/done/skipped/error`, payload `JobProgressPayload` with optional `downloadPct`), `model_download_progress` (resolving/downloading/ready), `batch_complete`.
+- **Commands** (`invoke`): registered in `lib.rs::run()` via `generate_handler!`. Key ones: `start_transcription` (takes `items: Vec<QueueItem>`), `append_to_batch`, `cancel_transcription`, `fetch_podcast_feed`, `list_whisper_models`, `clear_whisper_cache`, `vulkan_status`, `system_summary_language`, `list_llm_models`, `verify_api_key`, `improve_text`, `translate_text`, `list_microphones`, `start_dictation`, `stop_dictation`.
+- **Events** (`app.emit` → `listen` in `App.tsx`): `job_progress` (stages `queued/download/whisper/diarize/llm/done/skipped/error`, payload `JobProgressPayload` with optional `downloadPct`), `model_download_progress` (resolving/downloading/ready), `batch_complete`, plus `dictation_status` / `dictation_partial` / `dictation_final` / `dictation_level`.
 
-`AppConfig` crosses the boundary as a single struct. The Rust side (`config.rs`) uses `#[serde(rename_all = "camelCase")]`, so the Rust `snake_case` fields map 1:1 to the TS `camelCase` fields in `src/types.ts` / `src/defaults.ts`. **When adding a setting, update all of: `config.rs`, `types.ts`, `defaults.ts`, and the settings UI in `App.tsx`.** Settings persist client-side via `@tauri-apps/plugin-store` (note the `whisperModelPath` → `whisperModel` serde alias for old stores).
+`AppConfig` crosses the boundary as a single struct. The Rust side (`config.rs`) uses `#[serde(rename_all = "camelCase")]`, so the Rust `snake_case` fields map 1:1 to the TS `camelCase` fields in `src/types.ts` / `src/defaults.ts`. **When adding a setting, update all of: `config.rs`, `types.ts`, `defaults.ts`, and the settings UI in `SettingsDrawer.tsx`.** Settings persist client-side via `@tauri-apps/plugin-store` (note the `whisperModelPath` → `whisperModel` serde alias for old stores). The processing queue is stored separately under `queueItems`.
 
 UI layout (not all in the settings drawer):
 
-- Toolbar: Files, Podcast, Remove, Start; Markdown toggles (meta/summary/transcript); delete-audio trash toggle; Settings; About.
-- Settings sections: **Summary (LLM)**, **Transcription (Whisper)**, **Appearance** (System/Light/Dark).
-- Start: if any queue rows are selected, only those are sent to `start_transcription`; otherwise the full queue.
+- Toolbar: Queue/Dictation mode; Files, Podcast, Remove, Start; Markdown toggles (meta/summary/transcript); delete-audio trash toggle; Settings; About.
+- Settings sections: **Summary (LLM)** (provider / key / URL / model), **Transcription (Whisper)** (including prevent-sleep and speaker labels), **Dictation**, **Appearance** (System/Light/Dark).
+- Start: if any queue rows are selected, only those are sent to `start_transcription`; otherwise the full queue. While a batch runs, newly added files go to `append_to_batch`.
 - Languages: Whisper `language` is `"auto"` or ISO; summary `summaryLanguage` is `"system"` or ISO.
 
 `AppConfig::validate_for_run()` is the single source of truth for input validation and is called both from `start_transcription` and inside `run_batch`. The summary only runs when `summary_enabled()` is true (`include_summary` AND a non-empty API key) — without a key it is **skipped silently**, not an error. Validation requires that the output is non-empty: `summary_enabled() || include_transcript`. API URL/model are only validated when the summary will actually run.
@@ -71,10 +71,12 @@ UI layout (not all in the settings drawer):
 | Module | Responsibility |
 |---|---|
 | `lib.rs` | Tauri command handlers + app builder. `main.rs` just calls `run()`. |
-| `pipeline.rs` | The two-stage pipeline, progress events, cancellation, `.md` assembly (meta/summary/transcript toggles), optional audio deletion. |
-| `llm.rs` | Summary prompt + call (`generate_summary`), async-openai client, Whisper segment → raw text. |
+| `pipeline.rs` | The two-stage pipeline, live pending deque, progress events, cancellation, `.md` assembly, optional audio deletion, prevent-sleep guard. |
+| `llm.rs` | Summary / improve / translate prompts, `list_llm_models` / `verify_api_key`, Whisper segment → labeled transcript text. |
+| `diarize.rs` | pyannote ONNX segmentation + embeddings; isolated so an engine swap is one file. |
+| `dictation.rs` | cpal capture, RMS silence detection, dedicated Whisper context, microphone list. |
 | `podcast.rs` | `QueueItem`/`EpisodeMeta` types, RSS/Atom feed parsing (`feed-rs`), lazy episode download to output folder (`download_to_file_blocking`). |
-| `audio.rs` | Symphonia decode → mono f32 @ 16 kHz (linear resample) for whisper.cpp. |
+| `audio.rs` | Symphonia decode → mono f32 @ 16 kHz (linear resample) for whisper.cpp and the diarizer. |
 | `meta.rs` | Audio tag reading (lofty), `.md` / podcast audio path derivation, filename sanitizing. |
 | `model_download.rs` | Whisper model presets, HF download into `~/.cache/voxmd/whisper/`, cache listing/clearing. |
 | `config.rs` | `AppConfig`, defaults, validation, summary-language resolution (`system` → OS locale → ISO 639-1). |
@@ -83,18 +85,19 @@ UI layout (not all in the settings drawer):
 
 ### LLM usage (`llm.rs`)
 
-There is **no LLM pass over the transcript** — the transcript section in the output is the raw Whisper text (`[HH:MM:SS] text` lines from `segments_to_raw_text`). The only LLM call is `generate_summary`: one request per file with a fixed Markdown outline (one-sentence summary, key arguments, data & facts, quotes citing `[HH:MM:SS]`), written in the resolved summary language. Input is truncated at 50k chars; sampling is fixed (temperature 0.3, 8192 max tokens — not user-configurable); podcast metadata (feed/episode/date) is passed as an orientation context block. Prompts are authored in **English** (so timestamps stay ASCII), but the LLM is instructed to write in the configured language.
+There is **no LLM pass over the batch transcript** — the transcript section in the output is Whisper text (`[HH:MM:SS] text`, or `[HH:MM:SS] **Speaker N:** text` when diarization is on) from `format_transcript`. The batch LLM call is `generate_summary`: one request per file with a fixed Markdown outline (one-sentence summary, key arguments, data & facts, quotes citing `[HH:MM:SS]`), written in the resolved summary language. Input is truncated at 50k chars; sampling is fixed (temperature 0.3, 8192 max tokens — not user-configurable); podcast metadata (feed/episode/date) is passed as an orientation context block. Prompts are authored in **English** (so timestamps stay ASCII), but the LLM is instructed to write in the configured language. Dictation can call `improve_text` / `translate_text` on the captured text only.
 
 ### Output format
 
-`pipeline.rs::llm_stage` assembles: `# {title}` + optional meta block (feed/episode info for podcasts, file name/year for local files) + optional summary + optional `## Transcript` with the raw Whisper text — each part gated by `include_meta` / `include_summary` / `include_transcript`. The `.md` filename derives from audio tags (`{year} - {title}` or `{title}`, sanitized) for local files and from `{YYYY} - {episode title}` for episodes. **Files whose `.md` already exists are skipped** — re-running a batch is idempotent.
+`pipeline.rs::llm_stage` assembles: `# {title}` + optional meta block (feed/episode info for podcasts, file name/year for local files) + optional summary + optional `## Transcript` with the Whisper text — each part gated by `include_meta` / `include_summary` / `include_transcript`. The `.md` filename derives from audio tags (`{year} - {title}` or `{title}`, sanitized) for local files and from `{YYYY} - {episode title}` for episodes. **Files whose `.md` already exists are skipped** — re-running a batch is idempotent.
 
 ## Gotchas
 
-- Whisper exposes no fine-grained percentage; progress is stage-based (`download` has a percentage, `whisper` / `llm` do not).
+- Whisper exposes no fine-grained percentage; progress is stage-based (`download` has a percentage, `whisper` / `diarize` / `llm` do not).
 - `gpu-vulkan` is opt-in; `use_gpu` only applies when the binary was built with that feature **and** the Vulkan loader is present at runtime (`vulkan_runtime::gpu_usable()`). Missing `libvulkan.so` no longer prevents startup (link stub + runtime probe).
 - `delete_source_after_success` defaults to **false**. When enabled it deletes **`local_audio` only** (local files and downloaded podcast audio) — **never** the Markdown. Deletion failure is reported as a note, not a hard error.
-- `whisper_model` accepts a preset name (`turbo`, `large-v3`, …) **or** a local path ending in `.bin` or `.gguf` (path detection in `config.rs::looks_like_whisper_path`). UI: preset dropdown or **Custom path…** + file picker.
+- `whisper_model` accepts a preset name (`turbo`, `large-v3`, …) **or** a local path ending in `.bin` or `.gguf` (path detection in `config.rs::looks_like_whisper_path`). UI: preset dropdown or **Custom path…** + file picker. Dictation uses `dictation_model` the same way.
 - `podcast::download_to_file_blocking` uses `Handle::current().block_on` and must be called from a thread with a Tokio runtime context (true inside `spawn_blocking`).
 - The summary is **skipped silently when no API key is set** (`summary_enabled()`), so the app runs fully offline; validation only fails if the transcript is also disabled (empty output).
 - Whisper thread count is auto-detected (cores − 1); LLM sampling is fixed in `llm.rs` — neither is a setting anymore. Old stores with `temperature`/`maxTokens`/`whisperThreads` load fine (unknown fields ignored, dropped on next save).
+- `ort` must stay at `=2.0.0-rc.10` until `pyannote-rs` pins it; later rcs do not compile against this crate.

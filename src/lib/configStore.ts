@@ -1,19 +1,43 @@
 import { defaultConfig } from "../defaults";
-import type { AppConfig, PodcastRecent } from "../types";
+import type { AppConfig, LlmProvider, PodcastRecent } from "../types";
 
 export const STORE_FILE = "voxmd-settings.json";
 export const CONFIG_KEY = "appConfig";
+export const QUEUE_KEY = "queueItems";
 
 export const PODCAST_RECENTS_MAX = 10;
+
+const LLM_PROVIDERS: LlmProvider[] = ["deepseek", "openrouter", "custom"];
+
+function asLlmProvider(raw: unknown, apiBaseUrl: string): LlmProvider {
+  if (typeof raw === "string" && LLM_PROVIDERS.includes(raw as LlmProvider)) {
+    return raw as LlmProvider;
+  }
+  const url = apiBaseUrl.trim().replace(/\/+$/, "").toLowerCase();
+  if (url.includes("openrouter.ai")) return "openrouter";
+  if (url.includes("deepseek.com") || url.length === 0) return "deepseek";
+  return "custom";
+}
+
+function asBool(raw: unknown, fallback: boolean): boolean {
+  return typeof raw === "boolean" ? raw : fallback;
+}
+
+function asMaxSpeakers(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(20, Math.round(raw)));
+}
 
 /** Explicit field picking also drops keys from older versions (temperature, maxTokens, …). */
 export function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppConfig {
   const base = defaultConfig();
   if (!saved) return base;
+  const apiBaseUrl = saved.apiBaseUrl?.trim() ? saved.apiBaseUrl : base.apiBaseUrl;
   return {
     apiKey: saved.apiKey?.trim() ?? "",
-    apiBaseUrl: saved.apiBaseUrl?.trim() ? saved.apiBaseUrl : base.apiBaseUrl,
+    apiBaseUrl,
     apiModel: saved.apiModel?.trim() ? saved.apiModel : base.apiModel,
+    llmProvider: asLlmProvider(saved.llmProvider, apiBaseUrl),
     whisperModel: saved.whisperModel?.trim() ? saved.whisperModel : base.whisperModel,
     language: saved.language?.trim() ? saved.language : base.language,
     summaryLanguage: saved.summaryLanguage?.trim()
@@ -24,6 +48,11 @@ export function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppCo
     includeMeta: saved.includeMeta ?? base.includeMeta,
     includeSummary: saved.includeSummary ?? base.includeSummary,
     includeTranscript: saved.includeTranscript ?? base.includeTranscript,
+    preventSleep: asBool(saved.preventSleep, base.preventSleep),
+    diarizationEnabled: asBool(saved.diarizationEnabled, base.diarizationEnabled),
+    maxSpeakers: asMaxSpeakers(saved.maxSpeakers),
+    dictationModel: saved.dictationModel?.trim() ? saved.dictationModel : base.dictationModel,
+    microphoneName: saved.microphoneName ?? base.microphoneName,
     podcastOutputDir: saved.podcastOutputDir ?? base.podcastOutputDir,
     podcastRecents: normalizePodcastRecents(saved.podcastRecents),
   };

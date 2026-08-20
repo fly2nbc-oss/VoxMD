@@ -5,24 +5,28 @@ import {
   FileText,
   Info,
   ListX,
+  Mic,
   Play,
   Rss,
   Settings,
   Sparkles,
   Trash2,
 } from "lucide-react";
-import type { AppConfig } from "../types";
+import type { AppConfig, AppMode } from "../types";
 
 type MdToggle = "includeMeta" | "includeSummary" | "includeTranscript";
 
 interface Props {
   config: AppConfig;
   storeReady: boolean;
+  mode: AppMode;
   processing: boolean;
+  dictating: boolean;
   cancelling: boolean;
   itemCount: number;
   selectedCount: number;
   outputInvalid: boolean;
+  onModeChange: (mode: AppMode) => void;
   onPickFiles: () => void;
   onOpenPodcast: () => void;
   onRemoveSelected: () => void;
@@ -37,11 +41,14 @@ interface Props {
 export function AppToolbar({
   config,
   storeReady,
+  mode,
   processing,
+  dictating,
   cancelling,
   itemCount,
   selectedCount,
   outputInvalid,
+  onModeChange,
   onPickFiles,
   onOpenPodcast,
   onRemoveSelected,
@@ -54,6 +61,7 @@ export function AppToolbar({
 }: Props) {
   const hasApiKey = config.apiKey.trim() !== "";
   const suffix = selectedCount > 0 ? ` (${selectedCount})` : "";
+  const queueMode = mode === "queue";
 
   const mdToggles: Array<{
     key: MdToggle;
@@ -93,99 +101,143 @@ export function AppToolbar({
     <header className="app-bar">
       <h1 className="app-bar-title">VoxMD</h1>
 
-      <div className="app-bar-actions">
+      <div className="mode-switch" role="tablist" aria-label="App mode">
         <button
           type="button"
-          className="btn-secondary btn-sm"
-          onClick={onPickFiles}
-          title="Add audio files"
+          role="tab"
+          aria-selected={queueMode}
+          className={`mode-switch-btn${queueMode ? " is-active" : ""}`}
+          disabled={dictating}
+          title={dictating ? "Stop dictation first (Esc)" : "Queue mode (Ctrl+1)"}
+          onClick={() => onModeChange("queue")}
         >
-          <FileAudio2 size={18} aria-hidden />
-          <span>Files</span>
+          Queue
         </button>
         <button
           type="button"
-          className="btn-secondary btn-sm"
-          onClick={onOpenPodcast}
-          title="Add podcast episodes from an RSS feed"
+          role="tab"
+          aria-selected={!queueMode}
+          className={`mode-switch-btn${queueMode ? "" : " is-active"}`}
+          disabled={processing}
+          title={processing ? "Stop the batch first (Esc)" : "Dictation mode (Ctrl+2)"}
+          onClick={() => onModeChange("dictation")}
         >
-          <Rss size={18} aria-hidden />
-          <span>Podcast</span>
+          <Mic size={14} aria-hidden />
+          Dictation
         </button>
-        <button
-          type="button"
-          className="btn-secondary btn-sm"
-          disabled={processing || selectedCount === 0}
-          onClick={onRemoveSelected}
-          title="Remove selected entries from the list"
-        >
-          <ListX size={18} aria-hidden />
-          <span>Remove{suffix}</span>
-        </button>
-        <button
-          type="button"
-          className="btn-primary btn-sm"
-          disabled={processing || itemCount === 0 || outputInvalid}
-          onClick={onStart}
-          title={
-            outputInvalid
-              ? "Enable Transcript or Summary (with API key) in the toolbar"
-              : selectedCount > 0
-                ? `Start processing ${selectedCount} selected entr${selectedCount === 1 ? "y" : "ies"}`
-                : "Start processing all entries in the queue"
-          }
-        >
-          <Play size={18} aria-hidden />
-          <span>Start{suffix}</span>
-        </button>
-        {processing ? (
-          <button
-            type="button"
-            className="icon-btn icon-btn-danger"
-            title="Cancel batch (stops the current transcription or download)"
-            aria-label="Cancel"
-            disabled={cancelling}
-            onClick={onCancel}
-          >
-            <CircleStop size={22} aria-hidden />
-          </button>
-        ) : null}
       </div>
 
-      <div className="app-bar-end">
-        {mdToggles.map(({ key, icon: Icon, label, title }) => (
+      {queueMode ? (
+        <div className="app-bar-actions">
           <button
-            key={key}
             type="button"
-            className={`icon-btn${config[key] ? " icon-btn-toggle-on" : ""}`}
-            title={title}
-            aria-label={label}
-            aria-pressed={config[key]}
-            disabled={!storeReady || processing}
-            onClick={() => onToggleMd(key)}
+            className="btn-secondary btn-sm"
+            onClick={onPickFiles}
+            title={
+              processing
+                ? "Add audio files to the running batch"
+                : "Add audio files (Ctrl+O)"
+            }
           >
-            <Icon className="icon" size={20} aria-hidden />
+            <FileAudio2 size={18} aria-hidden />
+            <span>Files</span>
           </button>
-        ))}
-        <button
-          type="button"
-          className={`icon-btn${config.deleteSourceAfterSuccess ? " icon-btn-toggle-danger" : ""}`}
-          title={
-            config.deleteSourceAfterSuccess
-              ? "Audio deleted after export (Markdown always kept) — click to keep audio"
-              : "Audio kept after export — click to delete audio only (Markdown stays)"
-          }
-          aria-label="Delete audio after success"
-          aria-pressed={config.deleteSourceAfterSuccess}
-          disabled={!storeReady}
-          onClick={onToggleDeleteSource}
-        >
-          <Trash2 className="icon" size={20} aria-hidden />
-        </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={onOpenPodcast}
+            title={
+              processing
+                ? "Add podcast episodes to the running batch"
+                : "Add podcast episodes from an RSS feed"
+            }
+          >
+            <Rss size={18} aria-hidden />
+            <span>Podcast</span>
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={processing || selectedCount === 0}
+            onClick={onRemoveSelected}
+            title="Remove selected entries from the list"
+          >
+            <ListX size={18} aria-hidden />
+            <span>Remove{suffix}</span>
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            disabled={processing || dictating || itemCount === 0 || outputInvalid}
+            onClick={onStart}
+            title={
+              outputInvalid
+                ? "Enable Transcript or Summary (with API key) in the toolbar"
+                : selectedCount > 0
+                  ? `Start processing ${selectedCount} selected entr${selectedCount === 1 ? "y" : "ies"} (F5)`
+                  : "Start processing all entries in the queue (F5)"
+            }
+          >
+            <Play size={18} aria-hidden />
+            <span>Start{suffix}</span>
+          </button>
+          {processing ? (
+            <button
+              type="button"
+              className="icon-btn icon-btn-danger"
+              title="Cancel batch (Esc)"
+              aria-label="Cancel"
+              disabled={cancelling}
+              onClick={onCancel}
+            >
+              <CircleStop size={22} aria-hidden />
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div className="app-bar-actions">
+          <span className="app-bar-mode-hint">Live microphone transcription</span>
+        </div>
+      )}
+
+      <div className="app-bar-end">
+        {queueMode
+          ? mdToggles.map(({ key, icon: Icon, label, title }) => (
+              <button
+                key={key}
+                type="button"
+                className={`icon-btn${config[key] ? " icon-btn-toggle-on" : ""}`}
+                title={title}
+                aria-label={label}
+                aria-pressed={config[key]}
+                disabled={!storeReady || processing}
+                onClick={() => onToggleMd(key)}
+              >
+                <Icon className="icon" size={20} aria-hidden />
+              </button>
+            ))
+          : null}
+        {queueMode ? (
+          <button
+            type="button"
+            className={`icon-btn${config.deleteSourceAfterSuccess ? " icon-btn-toggle-danger" : ""}`}
+            title={
+              config.deleteSourceAfterSuccess
+                ? "Audio deleted after export (Markdown always kept) — click to keep audio"
+                : "Audio kept after export — click to delete audio only (Markdown stays)"
+            }
+            aria-label="Delete audio after success"
+            aria-pressed={config.deleteSourceAfterSuccess}
+            disabled={!storeReady}
+            onClick={onToggleDeleteSource}
+          >
+            <Trash2 className="icon" size={20} aria-hidden />
+          </button>
+        ) : null}
         <button
           type="button"
           className="icon-btn"
-          title="Settings"
+          title="Settings (Ctrl+,)"
           aria-label="Settings"
           onClick={onOpenSettings}
         >

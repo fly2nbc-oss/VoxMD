@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+### Added
+
+- **OpenRouter** (and a Custom option) next to Deepseek in Settings. Provider choice fills the base URL; OpenRouter lists chat models for a dropdown. **Verify** checks the API key.
+- **Speaker labels** after Whisper (`pyannote-rs` / ONNX). Optional; models download into `~/.cache/voxmd/diarize/` on first use. Transcript lines become `[HH:MM:SS] **Speaker N:** …`. A failed diarization keeps the unlabeled transcript.
+- **Dictation mode** (Ctrl+2): live microphone capture with its own Whisper model, silence-based commits, input level meter. **Improve** and **Translate** run on the dictation text when an API key is set; keep or discard the suggestion.
+- **Queue persistence**: unfinished entries are stored with settings and restored on launch. Completed exports are not kept.
+- **Append while running**: Files, drag-and-drop and Podcast add to a live batch (`append_to_batch`). Overall progress re-reads the growing total.
+- **Prevent sleep** during a batch (`keepawake`). Default on; a failure is logged, not fatal.
+- **Keyboard shortcuts**: F5, Esc, Ctrl+O, Ctrl+,, Ctrl+1/2. Ignored while typing; open dialogs keep Escape.
+- Container formats **MKA, MKV, AIFF, CAF** (Symphonia). `.mov` / `.avi` / `.wmv` / `.mpeg` stay out.
+
+### Changed
+
+- Whisper loop pulls from a process-wide deque instead of a fixed `Vec`, so the batch can grow. Channel capacity remains 1.
+- Linux CI/release images install cmake, ALSA, D-Bus, OpenSSL headers and g++ (needed by `pyannote-rs` / `cpal` / `keepawake`).
+- `ort` is pinned to `=2.0.0-rc.10` so `pyannote-rs` 0.3.4 compiles (later rcs pull a second `ndarray` and break Send/Sync).
+
 ## [1.0.8] - 2026-08-03
 
 ### Added
