@@ -72,6 +72,20 @@ export function DictationView({
     };
   }, [onStatus]);
 
+  const captureOwnsMic = stage === "listening" || stage === "finalizing";
+
+  useEffect(() => {
+    if (captureOwnsMic || processing) return;
+    let cancelled = false;
+    void invoke("start_mic_monitor", { microphoneName: config.microphoneName }).catch((e) => {
+      if (!cancelled) onStatus(`Microphone: ${toMsg(e)}`);
+    });
+    return () => {
+      cancelled = true;
+      void invoke("stop_mic_monitor");
+    };
+  }, [captureOwnsMic, processing, config.microphoneName, onStatus]);
+
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
     let cancelled = false;
@@ -186,8 +200,15 @@ export function DictationView({
           </select>
         </label>
 
-        <div className="dictation-meter" title="Input level" aria-hidden>
-          <div className="dictation-meter-fill" style={{ width: `${meterPct}%` }} />
+        <div className="dictation-meter-wrap" title="Input level">
+          <Mic
+            size={16}
+            className={meterPct > 6 ? "dictation-mic-live" : "dictation-mic-idle"}
+            aria-hidden
+          />
+          <div className="dictation-meter" aria-hidden>
+            <div className="dictation-meter-fill" style={{ width: `${meterPct}%` }} />
+          </div>
         </div>
 
         {running ? (
@@ -221,7 +242,7 @@ export function DictationView({
             ? "Loading Whisper model…"
             : stage === "finalizing"
               ? "Finalizing…"
-              : "Idle. Press Record (F5) and speak."}
+              : "Idle. Speak to check the meter, then press Record (F5)."}
       </p>
 
       <div className="dictation-editor">

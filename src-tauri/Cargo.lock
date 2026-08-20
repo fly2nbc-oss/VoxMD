@@ -5790,6 +5790,7 @@ dependencies = [
  "futures",
  "keepawake",
  "lofty",
+ "ndarray",
  "ort",
  "pyannote-rs",
  "reqwest",

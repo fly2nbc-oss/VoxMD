@@ -194,7 +194,8 @@ pub fn resample_mono_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
 }
 
 /// Reads audio with Symphonia and returns mono f32 @ 16 kHz for whisper.cpp.
-pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
+/// `abort` is checked between packets so a batch cancel can stop a long decode.
+pub fn decode_file_to_mono_16k(path: &Path, abort: impl Fn() -> bool) -> Result<Vec<f32>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
 
     let mut hint = Hint::new();
@@ -236,6 +237,9 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     let mut decoded_any = false;
 
     loop {
+        if abort() {
+            return Err("Cancelled.".to_string());
+        }
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
             // Clean end of stream.
@@ -346,7 +350,7 @@ mod tests {
             .collect();
         write_wav(&path, 2, src_rate, &frames);
 
-        let out = decode_file_to_mono_16k(&path).expect("decode");
+        let out = decode_file_to_mono_16k(&path, || false).expect("decode");
         let _ = std::fs::remove_file(&path);
 
         let expected = (f64::from(TARGET_RATE) * secs) as usize;
@@ -364,7 +368,9 @@ mod tests {
 
     #[test]
     fn missing_file_is_an_error() {
-        assert!(decode_file_to_mono_16k(std::path::Path::new("/no/such/file.wav")).is_err());
+        assert!(
+            decode_file_to_mono_16k(std::path::Path::new("/no/such/file.wav"), || false).is_err()
+        );
     }
 
     fn resample(input: &[f32], from: u32) -> Vec<f32> {

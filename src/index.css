@@ -928,13 +928,29 @@ button:focus-visible,
   min-width: 180px;
 }
 
+.dictation-meter-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.dictation-mic-idle {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.dictation-mic-live {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
 .dictation-meter {
   height: 8px;
   width: 120px;
   background: var(--line-soft);
   border-radius: var(--radius-pill);
   overflow: hidden;
-  margin-bottom: 10px;
 }
 
 .dictation-meter-fill {

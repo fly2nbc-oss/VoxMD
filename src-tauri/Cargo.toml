@@ -27,7 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "fs"] }
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "fs", "time"] }
 whisper-rs = { version = "0.16", default-features = false }
 # Only the chat-completion API is used; 0.41 ships every other endpoint behind
 # its own feature and enables none of them by default.
@@ -61,6 +61,9 @@ pyannote-rs = "0.3"
 # rcs. rc.13 pulled a second `ndarray` and SessionBuilder is not Send/Sync, so
 # the crate does not compile. Pin the version it was written against.
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray"] }
+# Same ndarray as pyannote-rs/ort — used by our local segmentation (upstream 0.3.4
+# feeds raw i16 to the ONNX model, so every frame looks like non-speech).
+ndarray = "0.16"
 # 0.13 renamed the `rustls-tls` feature to `rustls`. Kept in lockstep with
 # async-openai so the binary links one HTTP stack, not two.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }

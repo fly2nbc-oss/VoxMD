@@ -378,7 +378,17 @@ async fn llm_stage(
         emit_job(&app, p);
 
         let client = make_client(&cfg);
-        match llm::generate_summary(&client, &cfg, &summary_context(&job.work), &transcript).await {
+        let context = summary_context(&job.work);
+        let result = tokio::select! {
+            _ = wait_until_cancelled() => {
+                let mut p = payload(&id, &display_name, "skipped");
+                p.message = Some("Cancelled.".to_string());
+                emit_job(&app, p);
+                return;
+            }
+            result = llm::generate_summary(&client, &cfg, &context, &transcript) => result,
+        };
+        match result {
             Ok(s) => s.trim().to_string(),
             Err(e) => {
                 emit_error(
@@ -408,6 +418,13 @@ async fn llm_stage(
                 .to_string(),
             &done_counter,
         );
+        return;
+    }
+
+    if cancel_requested() {
+        let mut p = payload(&id, &display_name, "skipped");
+        p.message = Some("Cancelled.".to_string());
+        emit_job(&app, p);
         return;
     }
 
@@ -518,6 +535,19 @@ fn emit_skipped_remaining(app: &AppHandle, done: &Arc<AtomicUsize>) {
         p.overall = Some(overall_snapshot(done));
         p.message = Some("Cancelled.".to_string());
         emit_job(app, p);
+    }
+}
+
+fn emit_cancelled(app: &AppHandle, id: &str, display_name: &str, done: &Arc<AtomicUsize>) {
+    let mut p = payload(id, display_name, "skipped");
+    p.message = Some("Cancelled.".to_string());
+    emit_job(app, p);
+    emit_skipped_remaining(app, done);
+}
+
+async fn wait_until_cancelled() {
+    while !cancel_requested() {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     }
 }
 
@@ -749,9 +779,13 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
                 }
             };
 
-            let samples = match decode_file_to_mono_16k(&audio_path) {
+            let samples = match decode_file_to_mono_16k(&audio_path, cancel_requested) {
                 Ok(s) => s,
                 Err(e) => {
+                    if cancel_requested() || e == "Cancelled." {
+                        emit_cancelled(&app_w, &id, &display_name, &done_w);
+                        break;
+                    }
                     emit_error(&app_w, &id, &display_name, e, &done_w);
                     continue;
                 }
@@ -760,8 +794,8 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
             let lines = match transcribe_samples(&ctx, &samples, &cfg_w, on_progress) {
                 Ok(t) => t,
                 Err(e) => {
-                    if cancel_requested() {
-                        emit_skipped_remaining(&app_w, &done_w);
+                    if cancel_requested() || e == "Cancelled." {
+                        emit_cancelled(&app_w, &id, &display_name, &done_w);
                         break;
                     }
                     emit_error(&app_w, &id, &display_name, e, &done_w);
@@ -785,8 +819,17 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
                 let mut p = payload(&id, &display_name, "diarize");
                 p.message = Some("Separating speakers…".to_string());
                 emit_job(&app_w, p);
-                match diarize::label_transcript(&samples, &lines, cfg_w.max_speakers) {
+                match diarize::label_transcript(
+                    &samples,
+                    &lines,
+                    cfg_w.max_speakers,
+                    cancel_requested,
+                ) {
                     Ok(labeled) => raw = labeled,
+                    Err(e) if cancel_requested() || e == "Cancelled." => {
+                        emit_cancelled(&app_w, &id, &display_name, &done_w);
+                        break;
+                    }
                     Err(e) => {
                         // Keep the unlabeled transcript rather than failing the file.
                         let mut p = payload(&id, &display_name, "diarize");
@@ -797,18 +840,38 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
             }
 
             if cancel_requested() {
-                emit_skipped_remaining(&app_w, &done_w);
+                emit_cancelled(&app_w, &id, &display_name, &done_w);
                 break;
             }
 
-            let job = TranscribedJob {
+            JOBS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+            let mut job = TranscribedJob {
                 work: wi,
                 raw_text: raw,
             };
-
-            JOBS_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
-            if tx.blocking_send(job).is_err() {
-                JOBS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+            let mut queued = false;
+            loop {
+                if cancel_requested() {
+                    JOBS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+                    emit_cancelled(&app_w, &id, &display_name, &done_w);
+                    break;
+                }
+                match tx.try_send(job) {
+                    Ok(()) => {
+                        queued = true;
+                        break;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(back)) => {
+                        job = back;
+                        std::thread::sleep(std::time::Duration::from_millis(40));
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        JOBS_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+            if !queued {
                 break;
             }
         }

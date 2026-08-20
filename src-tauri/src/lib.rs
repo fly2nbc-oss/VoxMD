@@ -104,6 +104,16 @@ fn list_microphones() -> Result<Vec<MicrophoneInfo>, String> {
 }
 
 #[tauri::command]
+fn start_mic_monitor(app: tauri::AppHandle, microphone_name: String) -> Result<(), String> {
+    dictation::start_monitor(app, microphone_name)
+}
+
+#[tauri::command]
+fn stop_mic_monitor() {
+    dictation::stop_monitor();
+}
+
+#[tauri::command]
 async fn start_dictation(app: tauri::AppHandle, config: AppConfig) -> Result<(), String> {
     dictation::start(app, config).await
 }
@@ -166,6 +176,8 @@ pub fn run() {
             improve_text,
             translate_text,
             list_microphones,
+            start_mic_monitor,
+            stop_mic_monitor,
             start_dictation,
             stop_dictation,
             dictation_state,

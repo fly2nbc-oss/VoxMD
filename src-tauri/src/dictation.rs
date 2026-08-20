@@ -15,6 +15,7 @@ use crate::model_download;
 use crate::pipeline;
 
 const INTERVAL: Duration = Duration::from_millis(1200);
+const LEVEL_INTERVAL: Duration = Duration::from_millis(50);
 const MIN_AUDIO: f32 = 0.7;
 const TAIL_SIL: f32 = 0.8;
 const MIN_COMMIT: f32 = 1.6;
@@ -23,9 +24,15 @@ const MAX_BUFFER: f32 = 25.0;
 static DICTATING: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
 static JOIN: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
+static MONITOR_STOP: AtomicBool = AtomicBool::new(false);
+static MONITOR: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 
 fn join_lock() -> std::sync::MutexGuard<'static, Option<thread::JoinHandle<()>>> {
     JOIN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn monitor_lock() -> std::sync::MutexGuard<'static, Option<thread::JoinHandle<()>>> {
+    MONITOR.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub fn is_running() -> bool {
@@ -129,6 +136,43 @@ pub fn stop() {
     STOP.store(true, Ordering::SeqCst);
 }
 
+/// Live input meter without Whisper. No-op while dictation owns the microphone.
+pub fn start_monitor(app: AppHandle, microphone_name: String) -> Result<(), String> {
+    let mut slot = monitor_lock();
+    if DICTATING.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    MONITOR_STOP.store(true, Ordering::SeqCst);
+    if let Some(h) = slot.take() {
+        let _ = h.join();
+    }
+    MONITOR_STOP.store(false, Ordering::SeqCst);
+    let handle = thread::Builder::new()
+        .name("voxmd-mic-monitor".into())
+        .spawn(move || {
+            if let Err(e) = run_monitor(app.clone(), &microphone_name) {
+                let _ = app.emit(
+                    "dictation_status",
+                    serde_json::json!({
+                        "stage": "idle",
+                        "message": format!("Microphone: {e}")
+                    }),
+                );
+            }
+            let _ = app.emit("dictation_level", serde_json::json!({ "rms": 0.0 }));
+        })
+        .map_err(|e| format!("Microphone monitor: {e}"))?;
+    *slot = Some(handle);
+    Ok(())
+}
+
+pub fn stop_monitor() {
+    MONITOR_STOP.store(true, Ordering::SeqCst);
+    if let Some(h) = monitor_lock().take() {
+        let _ = h.join();
+    }
+}
+
 fn pick_device(preferred: &str) -> Result<cpal::Device, String> {
     let host = cpal::default_host();
     if !preferred.trim().is_empty() {
@@ -148,7 +192,35 @@ struct CaptureBuf {
     channels: usize,
 }
 
+fn run_monitor(app: AppHandle, mic: &str) -> Result<(), String> {
+    let device = pick_device(mic)?;
+    let supported = device
+        .default_input_config()
+        .map_err(|e| format!("Microphone config: {e}"))?;
+    let err_flag = Arc::new(Mutex::new(None::<String>));
+    let last_level = Arc::new(Mutex::new(Instant::now()));
+    let stream = build_input_stream(
+        app.clone(),
+        &device,
+        &supported,
+        None,
+        err_flag.clone(),
+        last_level,
+    )?;
+    stream
+        .play()
+        .map_err(|e| format!("Start microphone: {e}"))?;
+    while !MONITOR_STOP.load(Ordering::SeqCst) {
+        if let Some(e) = err_flag.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            return Err(e);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn run_loop(app: AppHandle, model_path: &str, mic: &str, language: &str) -> Result<(), String> {
+    stop_monitor();
     let device = pick_device(mic)?;
     let supported = device
         .default_input_config()
@@ -162,8 +234,16 @@ fn run_loop(app: AppHandle, model_path: &str, mic: &str, language: &str) -> Resu
         channels,
     }));
     let err_flag = Arc::new(Mutex::new(None::<String>));
+    let last_level = Arc::new(Mutex::new(Instant::now()));
 
-    let stream = build_input_stream(&device, &supported, buf.clone(), err_flag.clone())?;
+    let stream = build_input_stream(
+        app.clone(),
+        &device,
+        &supported,
+        Some(buf.clone()),
+        err_flag.clone(),
+        last_level,
+    )?;
     stream
         .play()
         .map_err(|e| format!("Start microphone: {e}"))?;
@@ -216,7 +296,11 @@ fn run_loop(app: AppHandle, model_path: &str, mic: &str, language: &str) -> Resu
             continue;
         }
 
-        let text = transcribe_buffer(&ctx, &leftover, language)?;
+        let text = match transcribe_buffer(&ctx, &leftover, language) {
+            Ok(t) => t,
+            Err(_) if STOP.load(Ordering::SeqCst) => break,
+            Err(e) => return Err(e),
+        };
         let tail_n = ((TAIL_SIL * SAMPLE_RATE as f32) as usize).min(n);
         let tail = &leftover[n - tail_n..];
         let rms_tail = rms(tail);
@@ -224,11 +308,6 @@ fn run_loop(app: AppHandle, model_path: &str, mic: &str, language: &str) -> Resu
         let silent = rms_tail < 0.006f32.max(3.0 * floor);
         let long_enough = n > (MIN_COMMIT * SAMPLE_RATE as f32) as usize;
         let overflow = n > (MAX_BUFFER * SAMPLE_RATE as f32) as usize;
-
-        let level = rms(leftover
-            .get(n.saturating_sub(SAMPLE_RATE as usize / 4)..)
-            .unwrap_or(&leftover));
-        let _ = app.emit("dictation_level", serde_json::json!({ "rms": level }));
 
         if (silent && long_enough) || overflow {
             leftover.drain(..n);
@@ -243,7 +322,8 @@ fn run_loop(app: AppHandle, model_path: &str, mic: &str, language: &str) -> Resu
     }
 
     drop(stream);
-    if leftover.len() > SAMPLE_RATE as usize / 2 {
+    let _ = app.emit("dictation_level", serde_json::json!({ "rms": 0.0 }));
+    if leftover.len() > SAMPLE_RATE as usize / 2 && !STOP.load(Ordering::SeqCst) {
         let _ = app.emit(
             "dictation_status",
             serde_json::json!({ "stage": "finalizing", "message": "Finalizing…" }),
@@ -258,30 +338,34 @@ fn run_loop(app: AppHandle, model_path: &str, mic: &str, language: &str) -> Resu
 }
 
 fn build_input_stream(
+    app: AppHandle,
     device: &cpal::Device,
     supported: &cpal::SupportedStreamConfig,
-    buf: Arc<Mutex<CaptureBuf>>,
+    buf: Option<Arc<Mutex<CaptureBuf>>>,
     err_flag: Arc<Mutex<Option<String>>>,
+    last_level: Arc<Mutex<Instant>>,
 ) -> Result<cpal::Stream, String> {
     let config = supported.config();
     match supported.sample_format() {
-        SampleFormat::F32 => open_stream::<f32>(device, &config, buf, err_flag),
-        SampleFormat::F64 => open_stream::<f64>(device, &config, buf, err_flag),
-        SampleFormat::I8 => open_stream::<i8>(device, &config, buf, err_flag),
-        SampleFormat::I16 => open_stream::<i16>(device, &config, buf, err_flag),
-        SampleFormat::I32 => open_stream::<i32>(device, &config, buf, err_flag),
-        SampleFormat::U8 => open_stream::<u8>(device, &config, buf, err_flag),
-        SampleFormat::U16 => open_stream::<u16>(device, &config, buf, err_flag),
-        SampleFormat::U32 => open_stream::<u32>(device, &config, buf, err_flag),
+        SampleFormat::F32 => open_stream::<f32>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::F64 => open_stream::<f64>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::I8 => open_stream::<i8>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::I16 => open_stream::<i16>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::I32 => open_stream::<i32>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::U8 => open_stream::<u8>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::U16 => open_stream::<u16>(app, device, &config, buf, err_flag, last_level),
+        SampleFormat::U32 => open_stream::<u32>(app, device, &config, buf, err_flag, last_level),
         other => Err(format!("Unsupported microphone sample format: {other}")),
     }
 }
 
 fn open_stream<T>(
+    app: AppHandle,
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    buf: Arc<Mutex<CaptureBuf>>,
+    buf: Option<Arc<Mutex<CaptureBuf>>>,
     err_flag: Arc<Mutex<Option<String>>>,
+    last_level: Arc<Mutex<Instant>>,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample + Send + 'static,
@@ -291,9 +375,12 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _| {
-                let mut g = buf.lock().unwrap_or_else(|e| e.into_inner());
-                g.samples
-                    .extend(data.iter().copied().map(|s| s.to_sample::<f32>()));
+                if let Some(buf) = &buf {
+                    let mut g = buf.lock().unwrap_or_else(|e| e.into_inner());
+                    g.samples
+                        .extend(data.iter().copied().map(|s| s.to_sample::<f32>()));
+                }
+                maybe_emit_level(&app, &last_level, rms_of(data));
             },
             move |err| {
                 *err_flag.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.to_string());
@@ -301,6 +388,36 @@ where
             None,
         )
         .map_err(|e| format!("Open microphone: {e}"))
+}
+
+fn maybe_emit_level(app: &AppHandle, last: &Mutex<Instant>, rms_val: f32) {
+    {
+        let mut g = last.lock().unwrap_or_else(|e| e.into_inner());
+        if g.elapsed() < LEVEL_INTERVAL {
+            return;
+        }
+        *g = Instant::now();
+    }
+    let _ = app.emit("dictation_level", serde_json::json!({ "rms": rms_val }));
+}
+
+fn rms_of<T>(data: &[T]) -> f32
+where
+    T: SizedSample,
+    f32: FromSample<T>,
+{
+    if data.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = data
+        .iter()
+        .copied()
+        .map(|s| {
+            let x = s.to_sample::<f32>();
+            x * x
+        })
+        .sum();
+    (sum / data.len() as f32).sqrt()
 }
 
 fn transcribe_buffer(
@@ -328,6 +445,10 @@ fn transcribe_buffer(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    type AbortCb = Box<dyn FnMut() -> bool>;
+    params.set_abort_callback_safe::<Option<AbortCb>, AbortCb>(Some(Box::new(|| {
+        STOP.load(Ordering::SeqCst)
+    })));
     state
         .full(params, samples)
         .map_err(|e| format!("Whisper inference: {e}"))?;
@@ -346,11 +467,7 @@ fn transcribe_buffer(
 }
 
 fn rms(xs: &[f32]) -> f32 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    let sum: f32 = xs.iter().map(|x| x * x).sum();
-    (sum / xs.len() as f32).sqrt()
+    rms_of(xs)
 }
 
 #[cfg(test)]

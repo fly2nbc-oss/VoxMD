@@ -5,13 +5,7 @@ import { isSummarySystemLanguage, isTranscriptionAuto } from "../lib/configStore
 import { toMsg } from "../lib/jobs";
 import { applyProvider, LLM_PROVIDER_PRESETS } from "../lib/llmProviders";
 import type { ThemeMode } from "../lib/theme";
-import type {
-  AppConfig,
-  LlmModelInfo,
-  LlmProvider,
-  MicrophoneInfo,
-  WhisperModelInfo,
-} from "../types";
+import type { AppConfig, LlmModelInfo, LlmProvider, WhisperModelInfo } from "../types";
 import { LanguagePicker } from "./LanguagePicker";
 import { Modal } from "./Modal";
 
@@ -77,7 +71,6 @@ export function SettingsDrawer({
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState("");
   const [verifyOk, setVerifyOk] = useState<boolean | null>(null);
-  const [mics, setMics] = useState<MicrophoneInfo[]>([]);
 
   const loadLlmModels = useCallback(async (cfg: AppConfig) => {
     if (!cfg.apiKey.trim() || !cfg.apiBaseUrl.trim()) {
@@ -98,12 +91,6 @@ export function SettingsDrawer({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const list = await invoke<MicrophoneInfo[]>("list_microphones");
-        if (!cancelled) setMics(list);
-      } catch {
-        if (!cancelled) setMics([]);
-      }
       if (!config.apiKey.trim() || !config.apiBaseUrl.trim()) {
         if (!cancelled) setLlmModelsLoading(false);
         return;
@@ -536,26 +523,6 @@ export function SettingsDrawer({
               </button>
             </div>
           ) : null}
-        </div>
-
-        <div className="field">
-          <label className="field-label" htmlFor="microphone">
-            Default microphone
-          </label>
-          <select
-            id="microphone"
-            className="input"
-            value={config.microphoneName}
-            onChange={(e) => set("microphoneName", e.target.value)}
-          >
-            <option value="">System default</option>
-            {mics.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-                {m.isDefault ? " (default)" : ""}
-              </option>
-            ))}
-          </select>
         </div>
       </section>
 

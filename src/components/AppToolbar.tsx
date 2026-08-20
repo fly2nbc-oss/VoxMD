@@ -4,6 +4,7 @@ import {
   FileAudio2,
   FileText,
   Info,
+  List,
   ListX,
   Mic,
   Play,
@@ -66,35 +67,11 @@ export function AppToolbar({
   const mdToggles: Array<{
     key: MdToggle;
     icon: typeof FileText;
-    label: string;
-    title: string;
+    name: string;
   }> = [
-    {
-      key: "includeMeta",
-      icon: FileText,
-      label: "Markdown: metadata block",
-      title: config.includeMeta
-        ? "Metadata block on — click to omit from Markdown"
-        : "Metadata block off — click to include file / episode info",
-    },
-    {
-      key: "includeSummary",
-      icon: Sparkles,
-      label: "Markdown: summary",
-      title: config.includeSummary
-        ? hasApiKey
-          ? "Summary (LLM) on — click to disable"
-          : "Summary on, but no API key yet (skipped until a key is set in Settings)"
-        : "Summary (LLM) off — click to enable",
-    },
-    {
-      key: "includeTranscript",
-      icon: Captions,
-      label: "Markdown: transcript",
-      title: config.includeTranscript
-        ? "Transcript on — click to omit from Markdown"
-        : "Transcript off — click to include Whisper transcript",
-    },
+    { key: "includeMeta", icon: FileText, name: "Metadata" },
+    { key: "includeSummary", icon: Sparkles, name: "Summary" },
+    { key: "includeTranscript", icon: Captions, name: "Transcript" },
   ];
 
   return (
@@ -111,6 +88,7 @@ export function AppToolbar({
           title={dictating ? "Stop dictation first (Esc)" : "Queue mode (Ctrl+1)"}
           onClick={() => onModeChange("queue")}
         >
+          <List size={14} aria-hidden />
           Queue
         </button>
         <button
@@ -202,31 +180,34 @@ export function AppToolbar({
 
       <div className="app-bar-end">
         {queueMode
-          ? mdToggles.map(({ key, icon: Icon, label, title }) => (
-              <button
-                key={key}
-                type="button"
-                className={`icon-btn${config[key] ? " icon-btn-toggle-on" : ""}`}
-                title={title}
-                aria-label={label}
-                aria-pressed={config[key]}
-                disabled={!storeReady || processing}
-                onClick={() => onToggleMd(key)}
-              >
-                <Icon className="icon" size={20} aria-hidden />
-              </button>
-            ))
+          ? mdToggles.map(({ key, icon: Icon, name }) => {
+              const on = config[key];
+              const title =
+                key === "includeSummary" && on && !hasApiKey
+                  ? "Summary — on (no API key)"
+                  : `${name} — ${on ? "on" : "off"}`;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`icon-btn${on ? " icon-btn-toggle-on" : ""}`}
+                  title={title}
+                  aria-label={name}
+                  aria-pressed={on}
+                  disabled={!storeReady || processing}
+                  onClick={() => onToggleMd(key)}
+                >
+                  <Icon className="icon" size={20} aria-hidden />
+                </button>
+              );
+            })
           : null}
         {queueMode ? (
           <button
             type="button"
             className={`icon-btn${config.deleteSourceAfterSuccess ? " icon-btn-toggle-danger" : ""}`}
-            title={
-              config.deleteSourceAfterSuccess
-                ? "Audio deleted after export (Markdown always kept) — click to keep audio"
-                : "Audio kept after export — click to delete audio only (Markdown stays)"
-            }
-            aria-label="Delete audio after success"
+            title={`Delete audio — ${config.deleteSourceAfterSuccess ? "on" : "off"}`}
+            aria-label="Delete audio"
             aria-pressed={config.deleteSourceAfterSuccess}
             disabled={!storeReady}
             onClick={onToggleDeleteSource}
@@ -237,7 +218,7 @@ export function AppToolbar({
         <button
           type="button"
           className="icon-btn"
-          title="Settings (Ctrl+,)"
+          title="Settings — Ctrl+,"
           aria-label="Settings"
           onClick={onOpenSettings}
         >
