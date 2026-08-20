@@ -41,7 +41,7 @@ pub struct AppConfig {
     /// Run pyannote speaker diarization after Whisper and label transcript lines.
     #[serde(default)]
     pub diarization_enabled: bool,
-    /// 0 = automatic speaker count; otherwise a cap passed to the embedding manager.
+    /// 0 = automatic speaker count; 1..=[`MAX_SPEAKERS_CAP`] is an exact count.
     #[serde(default)]
     pub max_speakers: u8,
     /// Whisper preset or path used only for live dictation.
@@ -74,6 +74,9 @@ fn default_llm_provider() -> String {
 fn default_dictation_model() -> String {
     "small".to_string()
 }
+
+/// Hard cap for speaker clustering (auto and explicit).
+pub const MAX_SPEAKERS_CAP: u8 = 8;
 
 /// Normalize locale string to ISO 639-1 (two lowercase letters).
 fn normalize_iso639_1(locale: &str) -> Option<String> {
@@ -147,6 +150,11 @@ impl AppConfig {
         self.include_summary && !self.api_key.trim().is_empty()
     }
 
+    /// 0 = automatic; otherwise the exact speaker count, clamped to [`MAX_SPEAKERS_CAP`].
+    pub fn speaker_count(&self) -> u8 {
+        self.max_speakers.min(MAX_SPEAKERS_CAP)
+    }
+
     pub fn validate_for_run(&self) -> Result<(), String> {
         if !self.summary_enabled() && !self.include_transcript {
             return Err(if self.include_summary {
@@ -200,7 +208,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_iso639_1, resolve_summary_language, AppConfig};
+    use super::{normalize_iso639_1, resolve_summary_language, AppConfig, MAX_SPEAKERS_CAP};
 
     #[test]
     fn resolve_explicit_iso_code() {
@@ -261,6 +269,12 @@ mod tests {
         assert!(cfg.prevent_sleep);
         assert!(!cfg.diarization_enabled);
         assert_eq!(cfg.max_speakers, 0);
+        assert_eq!(cfg.speaker_count(), 0);
+        let capped = AppConfig {
+            max_speakers: 20,
+            ..AppConfig::default()
+        };
+        assert_eq!(capped.speaker_count(), MAX_SPEAKERS_CAP);
         assert_eq!(cfg.dictation_model, "small");
         assert!(cfg.microphone_name.is_empty());
     }

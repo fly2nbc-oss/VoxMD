@@ -27,7 +27,7 @@ export interface AppConfig {
   preventSleep: boolean;
   /** Label Whisper lines with pyannote speaker turns. */
   diarizationEnabled: boolean;
-  /** 0 = let the clustering decide; otherwise cap the speaker count. */
+  /** 0 = let clustering decide (at most 8); 1–8 = exact speaker count. */
   maxSpeakers: number;
   /** Whisper preset (or path) used only for live dictation. */
   dictationModel: string;

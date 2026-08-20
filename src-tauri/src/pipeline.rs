@@ -298,25 +298,16 @@ fn should_refuse_empty_output(summary: &str, include_transcript: bool) -> bool {
 }
 
 /// Assembles the Markdown body from the enabled sections.
-///
-/// `truncation_note` is inserted immediately before the summary when the LLM
-/// only saw a prefix of the transcript.
 fn assemble_markdown(
     title: &str,
     meta: Option<&str>,
     summary: &str,
     transcript: Option<&str>,
-    truncation_note: Option<&str>,
 ) -> String {
     let mut content = format!("# {title}\n");
     if let Some(meta) = meta {
         content.push('\n');
         content.push_str(meta);
-        content.push('\n');
-    }
-    if let Some(note) = truncation_note {
-        content.push('\n');
-        content.push_str(note);
         content.push('\n');
     }
     if !summary.is_empty() {
@@ -331,8 +322,6 @@ fn assemble_markdown(
     }
     content
 }
-
-const SUMMARY_TRUNCATION_NOTE: &str = "> **Note:** The summary was generated from the first ~50,000 characters of the transcript only; later content was not included.";
 
 pub struct TranscribedJob {
     work: WorkItem,
@@ -365,20 +354,18 @@ async fn llm_stage(
     }
 
     let transcript = job.raw_text;
-    let truncated = cfg.summary_enabled() && llm::transcript_truncated_for_summary(&transcript);
 
     // Skipped silently when no API key is configured (see AppConfig::summary_enabled).
     let summary = if cfg.summary_enabled() {
         let mut p = payload(&id, &display_name, "llm");
-        p.message = Some(if truncated {
-            "Summary… (transcript truncated for LLM input)".to_string()
-        } else {
-            "Summary…".to_string()
-        });
+        p.message = Some("Summary…".to_string());
         emit_job(&app, p);
 
         let client = make_client(&cfg);
         let context = summary_context(&job.work);
+        let app_cb = app.clone();
+        let id_cb = id.clone();
+        let name_cb = display_name.clone();
         let result = tokio::select! {
             _ = wait_until_cancelled() => {
                 let mut p = payload(&id, &display_name, "skipped");
@@ -386,7 +373,17 @@ async fn llm_stage(
                 emit_job(&app, p);
                 return;
             }
-            result = llm::generate_summary(&client, &cfg, &context, &transcript) => result,
+            result = llm::generate_summary(&client, &cfg, &context, &transcript, move |part, total| {
+                let mut p = payload(&id_cb, &name_cb, "llm");
+                p.message = Some(if part == 0 {
+                    format!("Summary… (combining {total} parts)")
+                } else if total <= 1 {
+                    "Summary…".to_string()
+                } else {
+                    format!("Summary… (part {part}/{total})")
+                });
+                emit_job(&app_cb, p);
+            }) => result,
         };
         match result {
             Ok(s) => s.trim().to_string(),
@@ -433,11 +430,6 @@ async fn llm_stage(
     } else {
         None
     };
-    let truncation_note = if truncated && !summary.is_empty() {
-        Some(SUMMARY_TRUNCATION_NOTE)
-    } else {
-        None
-    };
     let transcript_section = if cfg.include_transcript {
         Some(transcript.as_str())
     } else {
@@ -448,7 +440,6 @@ async fn llm_stage(
         meta.as_deref(),
         &summary,
         transcript_section,
-        truncation_note,
     );
 
     let md_path = &job.work.md_path;
@@ -822,7 +813,7 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
                 match diarize::label_transcript(
                     &samples,
                     &lines,
-                    cfg_w.max_speakers,
+                    cfg_w.speaker_count(),
                     cancel_requested,
                 ) {
                     Ok(labeled) => raw = labeled,
@@ -960,26 +951,15 @@ mod tests {
             Some("- Source: a.mp3"),
             "## Summary\nHi",
             Some("[00:00:00] hello"),
-            None,
         );
         assert!(full.starts_with("# Talk\n"));
         assert!(full.contains("- Source: a.mp3"));
         assert!(full.contains("## Summary\nHi"));
         assert!(full.contains("## Transcript\n\n[00:00:00] hello\n"));
 
-        let summary_only = assemble_markdown("Talk", None, "## Summary\nHi", None, None);
+        let summary_only = assemble_markdown("Talk", None, "## Summary\nHi", None);
         assert!(!summary_only.contains("Transcript"));
         assert!(!summary_only.contains("Source"));
-
-        let with_note = assemble_markdown(
-            "Talk",
-            None,
-            "## Summary\nHi",
-            None,
-            Some(SUMMARY_TRUNCATION_NOTE),
-        );
-        assert!(with_note.contains("50,000 characters"));
-        assert!(with_note.find("50,000").unwrap() < with_note.find("## Summary").unwrap());
     }
 
     #[test]

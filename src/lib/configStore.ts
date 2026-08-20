@@ -25,7 +25,7 @@ function asBool(raw: unknown, fallback: boolean): boolean {
 
 function asMaxSpeakers(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(20, Math.round(raw)));
+  return Math.max(0, Math.min(8, Math.round(raw)));
 }
 
 /** Explicit field picking also drops keys from older versions (temperature, maxTokens, …). */

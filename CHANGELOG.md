@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 ### Added
 
 - **OpenRouter** (and a Custom option) next to Deepseek in Settings. Provider choice fills the base URL; OpenRouter lists chat models for a dropdown. **Verify** checks the API key.
-- **Speaker labels** after Whisper (`pyannote-rs` / ONNX). Optional; models download into `~/.cache/voxmd/diarize/` on first use. Transcript lines become `[HH:MM:SS] **Speaker N:** …`. A failed diarization keeps the unlabeled transcript.
+- **Speaker labels** after Whisper (`pyannote-rs` / ONNX). Optional; models download into `~/.cache/voxmd/diarize/` on first use. Transcript lines become `[HH:MM:SS] **Speaker N:** …`. A failed diarization keeps the unlabeled transcript. Clustering is offline (average-linkage on CAM++ embeddings); `maxSpeakers` 0 = auto (at most 8), 1–8 = exact count.
 - **Dictation mode** (Ctrl+2): live microphone capture with its own Whisper model, silence-based commits, input level meter. **Improve** and **Translate** run on the dictation text when an API key is set; keep or discard the suggestion.
 - **Queue persistence**: unfinished entries are stored with settings and restored on launch. Completed exports are not kept.
 - **Append while running**: Files, drag-and-drop and Podcast add to a live batch (`append_to_batch`). Overall progress re-reads the growing total.
@@ -23,6 +23,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - Whisper loop pulls from a process-wide deque instead of a fixed `Vec`, so the batch can grow. Channel capacity remains 1.
 - Linux CI/release images install cmake, ALSA, D-Bus, OpenSSL headers and g++ (needed by `pyannote-rs` / `cpal` / `keepawake`).
 - `ort` is pinned to `=2.0.0-rc.10` so `pyannote-rs` 0.3.4 compiles (later rcs pull a second `ndarray` and break Send/Sync).
+- Summaries cover the full transcript: one LLM call up to ~120k characters, then map-reduce in at most 16 parts. The 50k truncation note is gone.
+- Speaker diarization no longer uses pyannote-rs `EmbeddingManager` (which froze each cluster on its first embedding and invented extra speakers).
+
+### Fixed
+
+- Two-person interviews were labelled with many speakers because short/noisy first embeddings never updated.
 
 ## [1.0.8] - 2026-08-03
 

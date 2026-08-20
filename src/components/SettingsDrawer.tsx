@@ -447,26 +447,27 @@ export function SettingsDrawer({
             <span>Label speakers in the transcript</span>
           </label>
           <label className="field-label field-follow" htmlFor="maxSpeakers">
-            Max speakers (0 = auto)
+            Exact speaker count (0 = auto)
           </label>
           <input
             id="maxSpeakers"
             className="input"
             type="number"
             min={0}
-            max={20}
+            max={8}
             value={config.maxSpeakers}
             disabled={!config.diarizationEnabled}
             onChange={(e) => {
               const n = Number(e.target.value);
-              set("maxSpeakers", Number.isFinite(n) ? Math.max(0, Math.min(20, Math.round(n))) : 0);
+              set("maxSpeakers", Number.isFinite(n) ? Math.max(0, Math.min(8, Math.round(n))) : 0);
             }}
           />
           <p className="field-hint">
             Downloads two small ONNX models (~32 MB) on first use into{" "}
             <code>~/.cache/voxmd/diarize/</code>. Each transcript line becomes{" "}
-            <code>[HH:MM:SS] **Speaker N:** …</code>. If diarization fails, the unlabeled transcript
-            is kept.
+            <code>[HH:MM:SS] **Speaker N:** …</code>. 0 lets clustering decide (at most 8
+            speakers). Set 2 for a two-person interview. If diarization fails, the unlabeled
+            transcript is kept.
           </p>
         </div>
       </section>

@@ -27,6 +27,12 @@ describe("mergeConfig", () => {
     expect(merged.dictationModel).toBe("small");
   });
 
+  it("clamps maxSpeakers to 0..=8", () => {
+    expect(mergeConfig({ maxSpeakers: 20 } as never).maxSpeakers).toBe(8);
+    expect(mergeConfig({ maxSpeakers: -3 } as never).maxSpeakers).toBe(0);
+    expect(mergeConfig({ maxSpeakers: 2 } as never).maxSpeakers).toBe(2);
+  });
+
   it("infers OpenRouter from a stored URL when provider is missing", () => {
     const merged = mergeConfig({
       apiBaseUrl: "https://openrouter.ai/api/v1",

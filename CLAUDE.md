@@ -73,7 +73,7 @@ UI layout (not all in the settings drawer):
 | `lib.rs` | Tauri command handlers + app builder. `main.rs` just calls `run()`. |
 | `pipeline.rs` | The two-stage pipeline, live pending deque, progress events, cancellation, `.md` assembly, optional audio deletion, prevent-sleep guard. |
 | `llm.rs` | Summary / improve / translate prompts, `list_llm_models` / `verify_api_key`, Whisper segment → labeled transcript text. |
-| `diarize.rs` | pyannote ONNX segmentation + embeddings; isolated so an engine swap is one file. |
+| `diarize.rs` | pyannote ONNX segmentation + CAM++ embeddings; own agglomerative clustering (not EmbeddingManager). Isolated so an engine swap is one file. |
 | `dictation.rs` | cpal capture, RMS silence detection, dedicated Whisper context, microphone list. |
 | `podcast.rs` | `QueueItem`/`EpisodeMeta` types, RSS/Atom feed parsing (`feed-rs`), lazy episode download to output folder (`download_to_file_blocking`). |
 | `audio.rs` | Symphonia decode → mono f32 @ 16 kHz (linear resample) for whisper.cpp and the diarizer. |
@@ -85,7 +85,7 @@ UI layout (not all in the settings drawer):
 
 ### LLM usage (`llm.rs`)
 
-There is **no LLM pass over the batch transcript** — the transcript section in the output is Whisper text (`[HH:MM:SS] text`, or `[HH:MM:SS] **Speaker N:** text` when diarization is on) from `format_transcript`. The batch LLM call is `generate_summary`: one request per file with a fixed Markdown outline (one-sentence summary, key arguments, data & facts, quotes citing `[HH:MM:SS]`), written in the resolved summary language. Input is truncated at 50k chars; sampling is fixed (temperature 0.3, 8192 max tokens — not user-configurable); podcast metadata (feed/episode/date) is passed as an orientation context block. Prompts are authored in **English** (so timestamps stay ASCII), but the LLM is instructed to write in the configured language. Dictation can call `improve_text` / `translate_text` on the captured text only.
+There is **no LLM pass over the batch transcript** — the transcript section in the output is Whisper text (`[HH:MM:SS] text`, or `[HH:MM:SS] **Speaker N:** text` when diarization is on) from `format_transcript`. The batch LLM call is `generate_summary`: one request per file when the transcript fits in 120k characters, otherwise map-reduce (part notes, then a final summary) with the same Markdown outline. Sampling is fixed (temperature 0.3, 8192 max tokens — not user-configurable); podcast metadata (feed/episode/date) is passed as an orientation context block. Prompts are authored in **English** (so timestamps stay ASCII), but the LLM is instructed to write in the configured language. Dictation can call `improve_text` / `translate_text` on the captured text only.
 
 ### Output format
 

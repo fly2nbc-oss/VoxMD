@@ -13,8 +13,13 @@ use crate::config::{resolve_summary_language, AppConfig};
 const SUMMARY_TEMPERATURE: f32 = 0.3;
 /// The summary is capped at ~600 words; this leaves generous headroom.
 const SUMMARY_MAX_TOKENS: u32 = 8192;
-/// Transcript input is truncated to keep the request within typical context limits.
-const SUMMARY_MAX_INPUT_CHARS: usize = 50_000;
+/// One LLM call is enough below this byte length (~1.7 h of speech, ~43k tokens).
+const SUMMARY_SINGLE_CALL_MAX_CHARS: usize = 120_000;
+/// Floor for a map-reduce part; actual part size is `max(this, total / MAX_PARTS)`.
+const SUMMARY_MIN_PART_CHARS: usize = 40_000;
+const SUMMARY_MAX_PARTS: usize = 16;
+const SUMMARY_PART_OVERLAP_LINES: usize = 3;
+const SUMMARY_MAP_MAX_TOKENS: u32 = 1024;
 
 /// Prompts are authored in English (keeps timestamps ASCII); the output language is enforced.
 fn summary_system_prompt(lang: &str) -> String {
@@ -33,6 +38,20 @@ Rules:
    ## Notable Quotes — 3 to 8 short verbatim quotes carrying concrete facts or striking statements. One per line, formatted as: > "verbatim quote" [HH:MM:SS] — using the timestamp of the transcript line the quote starts on. Omit this section entirely if nothing stands out.
 4. Style: factual, concise, informative. No filler words. Do not state anything that is not in the transcript.
 5. Length: at most about 600 words in total."###
+    )
+}
+
+fn map_notes_prompt(lang: &str) -> String {
+    format!(
+        r###"You extract compact notes from one part of a longer transcript.
+
+Language: Write the notes in "{lang}" (ISO 639-1). Quotes stay verbatim in the original language, each with its [HH:MM:SS] timestamp.
+
+Rules:
+1. No preamble, no closing remarks, no code fences.
+2. Bullet points only: key statements, arguments, numbers, dates.
+3. Include up to 5 notable verbatim quotes as: > "quote" [HH:MM:SS]
+4. Stay faithful to this part only. Do not invent content from outside it."###
     )
 }
 
@@ -59,11 +78,6 @@ pub fn make_client(cfg: &AppConfig) -> Client<OpenAIConfig> {
         // loses the timeout, which is strictly better than failing the batch.
         Err(_) => Client::with_config(oc),
     }
-}
-
-/// Whether the transcript exceeds the summary input cap (byte length).
-pub fn transcript_truncated_for_summary(transcript: &str) -> bool {
-    transcript.len() > SUMMARY_MAX_INPUT_CHARS
 }
 
 async fn call_llm(
@@ -115,24 +129,74 @@ async fn call_llm(
     Ok(text)
 }
 
-/// `context` is a short orientation block (title, podcast/episode info); may be empty.
-pub async fn generate_summary(
-    client: &Client<OpenAIConfig>,
-    cfg: &AppConfig,
-    context: &str,
-    transcript: &str,
-) -> Result<String, String> {
-    let text_for_summary = if transcript_truncated_for_summary(transcript) {
-        let mut s = transcript
-            .chars()
-            .take(SUMMARY_MAX_INPUT_CHARS)
-            .collect::<String>();
-        s.push_str("\n\n[... transcript truncated for summary ...]");
-        s
-    } else {
-        transcript.to_string()
-    };
+fn looks_like_context_overflow(err: &str) -> bool {
+    let l = err.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "context length",
+        "context_length",
+        "maximum context",
+        "context window",
+        "too many tokens",
+        "token limit",
+        "prompt is too long",
+        "prompt too long",
+        "maximum prompt",
+        "max prompt",
+        "exceeds the model's",
+        "exceeds maximum",
+        "reduce the length of the messages",
+        "this model's maximum",
+        "requested a too large",
+        "string too long",
+    ];
+    NEEDLES.iter().any(|n| l.contains(n))
+}
 
+fn split_transcript_parts(transcript: &str) -> Vec<String> {
+    let lines: Vec<&str> = transcript.split('\n').collect();
+    if lines.is_empty() {
+        return vec![transcript.to_string()];
+    }
+    let total = transcript.len().max(1);
+    let part_target = SUMMARY_MIN_PART_CHARS.max(total.div_ceil(SUMMARY_MAX_PARTS));
+    let mut parts: Vec<Vec<&str>> = Vec::new();
+    let mut cur: Vec<&str> = Vec::new();
+    let mut cur_len = 0usize;
+
+    for line in &lines {
+        let add = line.len() + usize::from(!cur.is_empty());
+        if !cur.is_empty() && cur_len + add > part_target && parts.len() < SUMMARY_MAX_PARTS - 1 {
+            parts.push(std::mem::take(&mut cur));
+            cur_len = 0;
+        }
+        if !cur.is_empty() {
+            cur_len += 1;
+        }
+        cur.push(*line);
+        cur_len += line.len();
+    }
+    if !cur.is_empty() {
+        parts.push(cur);
+    }
+
+    let mut out = Vec::with_capacity(parts.len());
+    for i in 0..parts.len() {
+        let mut chunk: Vec<&str> = Vec::new();
+        if i > 0 {
+            let prev = &parts[i - 1];
+            let n = SUMMARY_PART_OVERLAP_LINES.min(prev.len());
+            chunk.extend_from_slice(&prev[prev.len() - n..]);
+        }
+        chunk.extend_from_slice(&parts[i]);
+        out.push(chunk.join("\n"));
+    }
+    if out.is_empty() {
+        out.push(transcript.to_string());
+    }
+    out
+}
+
+fn whole_user_message(context: &str, transcript: &str) -> String {
     let mut user = String::new();
     if !context.trim().is_empty() {
         user.push_str(
@@ -142,10 +206,37 @@ pub async fn generate_summary(
         user.push_str("\n\n");
     }
     user.push_str("Transcript:\n\n");
-    user.push_str(&text_for_summary);
+    user.push_str(transcript);
+    user
+}
 
+fn reduce_user_message(context: &str, notes: &[String]) -> String {
+    let mut user = String::new();
+    if !context.trim().is_empty() {
+        user.push_str(
+            "Recording context (orientation only — summarize the notes, not this block):\n",
+        );
+        user.push_str(context.trim());
+        user.push_str("\n\n");
+    }
+    user.push_str(
+        "These are sequential notes from parts of one recording. Produce the final summary from all of them.\n\n",
+    );
+    for (i, note) in notes.iter().enumerate() {
+        user.push_str(&format!("## Part {}\n\n{}\n\n", i + 1, note.trim()));
+    }
+    user
+}
+
+async fn summarize_whole(
+    client: &Client<OpenAIConfig>,
+    cfg: &AppConfig,
+    context: &str,
+    transcript: &str,
+) -> Result<String, String> {
     let lang = resolve_summary_language(&cfg.summary_language);
     let system = summary_system_prompt(&lang);
+    let user = whole_user_message(context, transcript);
     call_llm(
         client,
         &cfg.api_model,
@@ -155,6 +246,84 @@ pub async fn generate_summary(
         &user,
     )
     .await
+}
+
+async fn summarize_chunked<F>(
+    client: &Client<OpenAIConfig>,
+    cfg: &AppConfig,
+    context: &str,
+    transcript: &str,
+    on_part: F,
+) -> Result<String, String>
+where
+    F: Fn(usize, usize),
+{
+    let parts = split_transcript_parts(transcript);
+    let total = parts.len();
+    let lang = resolve_summary_language(&cfg.summary_language);
+    let map_system = map_notes_prompt(&lang);
+    let mut notes = Vec::with_capacity(total);
+    for (i, part) in parts.iter().enumerate() {
+        on_part(i + 1, total);
+        let mut user = String::new();
+        if !context.trim().is_empty() {
+            user.push_str(
+                "Recording context (orientation only — extract notes from this part, not this block):\n",
+            );
+            user.push_str(context.trim());
+            user.push_str("\n\n");
+        }
+        user.push_str(&format!("Transcript part {} of {total}:\n\n{part}", i + 1));
+        let note = call_llm(
+            client,
+            &cfg.api_model,
+            SUMMARY_TEMPERATURE,
+            SUMMARY_MAP_MAX_TOKENS,
+            &map_system,
+            &user,
+        )
+        .await?;
+        notes.push(note);
+    }
+    on_part(0, total);
+    let system = summary_system_prompt(&lang);
+    let user = reduce_user_message(context, &notes);
+    call_llm(
+        client,
+        &cfg.api_model,
+        SUMMARY_TEMPERATURE,
+        SUMMARY_MAX_TOKENS,
+        &system,
+        &user,
+    )
+    .await
+}
+
+/// `context` is a short orientation block (title, podcast/episode info); may be empty.
+///
+/// `on_part(k, n)` reports map-reduce progress: `k` in 1..=n for each part,
+/// `k == 0` for the combining step. Unused for a single-call summary.
+pub async fn generate_summary<F>(
+    client: &Client<OpenAIConfig>,
+    cfg: &AppConfig,
+    context: &str,
+    transcript: &str,
+    on_part: F,
+) -> Result<String, String>
+where
+    F: Fn(usize, usize) + Send,
+{
+    if transcript.len() <= SUMMARY_SINGLE_CALL_MAX_CHARS {
+        match summarize_whole(client, cfg, context, transcript).await {
+            Ok(s) => Ok(s),
+            Err(e) if looks_like_context_overflow(&e) => {
+                summarize_chunked(client, cfg, context, transcript, on_part).await
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        summarize_chunked(client, cfg, context, transcript, on_part).await
+    }
 }
 
 pub fn fmt_ts(seconds: f32) -> String {
@@ -214,11 +383,13 @@ pub fn format_transcript(lines: &[TranscriptLine], speakers: &[Option<usize>]) -
 }
 
 /// Assign each Whisper line the speaker whose turn overlaps it the most.
+/// Lines with no overlap inherit the previous speaker (then the next, for a
+/// leading gap).
 pub fn speakers_for_lines(
     lines: &[TranscriptLine],
     turns: &[(f32, f32, usize)],
 ) -> Vec<Option<usize>> {
-    lines
+    let mut assigned: Vec<Option<usize>> = lines
         .iter()
         .map(|line| {
             let mut best: Option<(f32, usize)> = None;
@@ -233,7 +404,48 @@ pub fn speakers_for_lines(
             }
             best.map(|(_, n)| n)
         })
-        .collect()
+        .collect();
+    inherit_speaker_gaps(&mut assigned);
+    assigned
+}
+
+fn inherit_speaker_gaps(speakers: &mut [Option<usize>]) {
+    let mut prev = None;
+    for s in speakers.iter_mut() {
+        if s.is_some() {
+            prev = *s;
+        } else if let Some(p) = prev {
+            *s = Some(p);
+        }
+    }
+    let first = speakers.iter().copied().find(Option::is_some).flatten();
+    if let Some(first) = first {
+        for s in speakers.iter_mut() {
+            if s.is_some() {
+                break;
+            }
+            *s = Some(first);
+        }
+    }
+}
+
+/// Replace a short outlier when both neighbours agree. Kept separate so a
+/// bad calibration can drop it without touching overlap assignment.
+pub fn smooth_speaker_outliers(lines: &[TranscriptLine], speakers: &mut [Option<usize>]) {
+    const MAX_OUTLIER_S: f32 = 1.5;
+    if speakers.len() < 3 || speakers.len() != lines.len() {
+        return;
+    }
+    let orig = speakers.to_vec();
+    for i in 1..speakers.len() - 1 {
+        let dur = (lines[i].end - lines[i].start).max(0.0);
+        if dur >= MAX_OUTLIER_S {
+            continue;
+        }
+        if orig[i - 1] == orig[i + 1] && orig[i - 1].is_some() && orig[i] != orig[i - 1] {
+            speakers[i] = orig[i - 1];
+        }
+    }
 }
 
 fn improve_system_prompt() -> &'static str {
@@ -406,10 +618,18 @@ fn regex_skip_model() -> impl Fn(&str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        fmt_ts, format_transcript, interval_overlap, parse_model_ids, speakers_for_lines,
-        summary_system_prompt, transcript_truncated_for_summary, TranscriptLine,
-        SUMMARY_MAX_INPUT_CHARS,
+        fmt_ts, format_transcript, interval_overlap, looks_like_context_overflow, parse_model_ids,
+        smooth_speaker_outliers, speakers_for_lines, split_transcript_parts, summary_system_prompt,
+        TranscriptLine, SUMMARY_MAX_PARTS, SUMMARY_MIN_PART_CHARS, SUMMARY_SINGLE_CALL_MAX_CHARS,
     };
+
+    fn line(start: f32, end: f32, text: &str) -> TranscriptLine {
+        TranscriptLine {
+            start,
+            end,
+            text: text.into(),
+        }
+    }
 
     #[test]
     fn fmt_ts_formats_hours_minutes_seconds() {
@@ -427,10 +647,47 @@ mod tests {
     }
 
     #[test]
-    fn truncation_flag_uses_byte_cap() {
-        assert!(!transcript_truncated_for_summary("short"));
-        let over = "a".repeat(SUMMARY_MAX_INPUT_CHARS + 1);
-        assert!(transcript_truncated_for_summary(&over));
+    fn split_parts_stay_on_line_boundaries() {
+        let mut lines = Vec::new();
+        for i in 0..250 {
+            lines.push(format!("[{i:02}:00:00] {}", "word ".repeat(120)));
+        }
+        let text = lines.join("\n");
+        assert!(text.len() > SUMMARY_SINGLE_CALL_MAX_CHARS);
+        let parts = split_transcript_parts(&text);
+        assert!(parts.len() >= 2);
+        assert!(parts.len() <= SUMMARY_MAX_PARTS);
+        for part in &parts {
+            assert!(part.starts_with('['), "{part:?}");
+            assert!(part.len() >= SUMMARY_MIN_PART_CHARS / 4);
+        }
+        // Overlap: part 2 starts with the tail of part 1.
+        let first_tail: Vec<&str> = parts[0].lines().rev().take(3).collect();
+        let second_head: Vec<&str> = parts[1].lines().take(3).collect();
+        assert_eq!(
+            first_tail.into_iter().rev().collect::<Vec<_>>(),
+            second_head
+        );
+    }
+
+    #[test]
+    fn split_caps_at_max_parts() {
+        let line = format!("[00:00:00] {}", "x".repeat(50_000));
+        let text = std::iter::repeat_n(line.as_str(), 16)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parts = split_transcript_parts(&text);
+        assert_eq!(parts.len(), SUMMARY_MAX_PARTS);
+    }
+
+    #[test]
+    fn context_overflow_needles() {
+        assert!(looks_like_context_overflow(
+            "This model's maximum context length is 8192 tokens"
+        ));
+        assert!(looks_like_context_overflow("prompt is too long"));
+        assert!(!looks_like_context_overflow("invalid api key"));
+        assert!(!looks_like_context_overflow("rate limit exceeded"));
     }
 
     #[test]
@@ -467,6 +724,38 @@ mod tests {
         let assigned = speakers_for_lines(&lines, &turns);
         assert_eq!(assigned, vec![Some(2)]);
         assert!(interval_overlap(0.0, 1.0, 2.0, 3.0) == 0.0);
+    }
+
+    #[test]
+    fn unlabeled_lines_inherit_neighbour() {
+        let lines = [
+            line(0.0, 1.0, "a"),
+            line(1.0, 2.0, "b"),
+            line(2.0, 3.0, "c"),
+        ];
+        let turns = [(1.0, 2.0, 2)];
+        let assigned = speakers_for_lines(&lines, &turns);
+        assert_eq!(assigned, vec![Some(2), Some(2), Some(2)]);
+    }
+
+    #[test]
+    fn smooth_drops_short_outlier() {
+        let lines = [
+            line(0.0, 2.0, "a"),
+            line(2.0, 2.8, "b"),
+            line(2.8, 5.0, "c"),
+        ];
+        let mut speakers = vec![Some(1), Some(2), Some(1)];
+        smooth_speaker_outliers(&lines, &mut speakers);
+        assert_eq!(speakers, vec![Some(1), Some(1), Some(1)]);
+        let mut long = vec![Some(1), Some(2), Some(1)];
+        let long_lines = [
+            line(0.0, 2.0, "a"),
+            line(2.0, 4.0, "b"),
+            line(4.0, 6.0, "c"),
+        ];
+        smooth_speaker_outliers(&long_lines, &mut long);
+        assert_eq!(long, vec![Some(1), Some(2), Some(1)]);
     }
 
     #[test]

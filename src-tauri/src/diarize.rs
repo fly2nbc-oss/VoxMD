@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ndarray::{ArrayViewD, Axis};
@@ -7,7 +8,8 @@ use ort::session::Session;
 use ort::value::TensorRef;
 
 use crate::audio::SAMPLE_RATE;
-use crate::llm::{format_transcript, speakers_for_lines, TranscriptLine};
+use crate::config::MAX_SPEAKERS_CAP;
+use crate::llm::{format_transcript, smooth_speaker_outliers, speakers_for_lines, TranscriptLine};
 use crate::model_download;
 
 const SEG_URL: &str =
@@ -15,10 +17,31 @@ const SEG_URL: &str =
 const EMB_URL: &str = "https://github.com/thewh1teagle/pyannote-rs/releases/download/v0.1.0/wespeaker_en_voxceleb_CAM++.onnx";
 const SEG_FILE: &str = "segmentation-3.0.onnx";
 const EMB_FILE: &str = "wespeaker_en_voxceleb_CAM++.onnx";
-const SIMILARITY: f32 = 0.5;
-const AUTO_SPEAKER_CAP: usize = 20;
+/// Auto mode stops at this many speakers even if the distance threshold would
+/// keep more (pyannote-rs used 20 and routinely invented extras).
+const AUTO_SPEAKER_CAP: usize = MAX_SPEAKERS_CAP as usize;
 const FRAME_SIZE: usize = 270;
 const FRAME_START: usize = 721;
+
+/// Merge same-class speech across a pause shorter than this, within one window.
+const MERGE_GAP_S: f32 = 0.25;
+/// CAM++ embeddings below this duration are noise; skip them.
+const MIN_EMBED_S: f32 = 0.4;
+/// Anchors for clustering: long enough for a stable voiceprint, no overlap class.
+const MIN_ANCHOR_S: f32 = 1.5;
+const MAX_ANCHORS: usize = 600;
+/// Average-linkage cosine distance below which two clusters merge in auto mode.
+/// Distance 0.45 ≈ cosine similarity 0.55.
+const CLUSTER_DIST: f32 = 0.45;
+/// Drop clusters whose total anchored speech is shorter than this (auto mode).
+const MIN_CLUSTER_S: f32 = 3.0;
+/// Turns shorter than this are absorbed into the longer neighbour.
+const MIN_TURN_S: f32 = 0.4;
+
+/// Powerset classes 4–6 are two simultaneous speakers inside a 10 s window.
+fn is_overlap_class(class: usize) -> bool {
+    class >= 4
+}
 
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir()
@@ -60,6 +83,43 @@ struct SpeechSeg {
     start: f32,
     end: f32,
     samples: Vec<i16>,
+    class: u8,
+    overlap: bool,
+    window: usize,
+}
+
+impl SpeechSeg {
+    fn duration(&self) -> f32 {
+        (self.end - self.start).max(0.0)
+    }
+}
+
+struct SegEmb {
+    start: f32,
+    end: f32,
+    embedding: Option<Vec<f32>>,
+    overlap: bool,
+}
+
+impl SegEmb {
+    fn duration(&self) -> f32 {
+        (self.end - self.start).max(0.0)
+    }
+    fn mid(&self) -> f32 {
+        0.5 * (self.start + self.end)
+    }
+}
+
+#[allow(dead_code)]
+struct DiarizeStats {
+    n_segments: usize,
+    duration_hist: [usize; 5],
+    n_with_embed: usize,
+    n_anchors: usize,
+    merge_distances: Vec<f32>,
+    n_clusters: usize,
+    speech_per_cluster: Vec<f32>,
+    first_turns: Vec<(f32, f32, usize)>,
 }
 
 /// Runs pyannote segmentation + embeddings and labels Whisper lines.
@@ -79,72 +139,502 @@ pub fn label_transcript(
     if !seg_path.is_file() || !emb_path.is_file() {
         return Err("Diarization models are not cached. They download on first use.".to_string());
     }
-    let turns = diarize_turns(samples_f32, &seg_path, &emb_path, max_speakers, &abort)?;
+    let (turns, _) = run_diarize(samples_f32, &seg_path, &emb_path, max_speakers, &abort)?;
     if turns.is_empty() {
         return Err("No speaker turns found.".to_string());
     }
-    let assigned = speakers_for_lines(lines, &turns);
+    let mut assigned = speakers_for_lines(lines, &turns);
+    smooth_speaker_outliers(lines, &mut assigned);
     Ok(format_transcript(lines, &assigned))
 }
 
-fn diarize_turns(
+fn run_diarize(
     samples_f32: &[f32],
     seg_path: &Path,
     emb_path: &Path,
     max_speakers: u8,
     abort: &impl Fn() -> bool,
-) -> Result<Vec<(f32, f32, usize)>, String> {
+) -> Result<(Vec<(f32, f32, usize)>, DiarizeStats), String> {
     if samples_f32.is_empty() {
         return Err("No audio for diarization.".to_string());
     }
     let samples = to_i16(samples_f32);
-    let cap = if max_speakers == 0 {
-        AUTO_SPEAKER_CAP
+    let target_k = if max_speakers == 0 {
+        None
     } else {
-        (max_speakers as usize).clamp(1, AUTO_SPEAKER_CAP)
+        Some((max_speakers as usize).clamp(1, AUTO_SPEAKER_CAP))
     };
 
     let mut extractor = pyannote_rs::EmbeddingExtractor::new(emb_path)
         .map_err(|e| format!("Diarization embedding model: {e}"))?;
-    let mut manager = pyannote_rs::EmbeddingManager::new(cap);
     let segments = speech_segments(&samples, SAMPLE_RATE, seg_path, abort)?;
+    let duration_hist = duration_histogram(segments.iter().map(SpeechSeg::duration));
 
-    let mut turns = Vec::new();
-    for seg in segments {
+    let mut items = Vec::with_capacity(segments.len());
+    for seg in &segments {
         if abort() {
             return Err("Cancelled.".to_string());
         }
-        if seg.samples.is_empty() {
-            continue;
-        }
-        let embedding = match extractor.compute(&seg.samples) {
-            Ok(iter) => iter.collect::<Vec<f32>>(),
-            Err(_) => continue,
-        };
-        let at_cap = manager.get_all_speakers().len() >= cap;
-        let id = if at_cap {
-            match manager.get_best_speaker_match(embedding) {
-                Ok(id) => id,
-                Err(_) => continue,
+        let embedding = if seg.duration() >= MIN_EMBED_S && !seg.samples.is_empty() {
+            match extractor.compute(&seg.samples) {
+                Ok(iter) => {
+                    let mut v: Vec<f32> = iter.collect();
+                    l2_normalize(&mut v);
+                    Some(v)
+                }
+                Err(_) => None,
             }
         } else {
-            match manager.search_speaker(embedding, SIMILARITY) {
-                Some(id) => id,
-                None => continue,
-            }
+            None
         };
-        // EmbeddingManager assigns 1-based ids (see pyannote-rs EmbeddingManager::new).
-        turns.push((seg.start, seg.end, id));
+        items.push(SegEmb {
+            start: seg.start,
+            end: seg.end,
+            embedding,
+            overlap: seg.overlap,
+        });
     }
-    Ok(turns)
+
+    let (turns, stats) = cluster_and_assign(&items, target_k, duration_hist)?;
+    Ok((turns, stats))
 }
 
-/// Local copy of pyannote-rs 0.3.4 `get_segments` with three upstream bugs fixed:
+fn cluster_and_assign(
+    items: &[SegEmb],
+    target_k: Option<usize>,
+    duration_hist: [usize; 5],
+) -> Result<(Vec<(f32, f32, usize)>, DiarizeStats), String> {
+    let n_with_embed = items.iter().filter(|s| s.embedding.is_some()).count();
+    let mut anchor_idx: Vec<usize> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.embedding.is_some() && !s.overlap && s.duration() >= MIN_ANCHOR_S)
+        .map(|(i, _)| i)
+        .collect();
+
+    if anchor_idx.is_empty() {
+        // Fall back to any embedded segment so a short clip still labels.
+        let mut any: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.embedding.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        any.sort_by(|a, b| {
+            items[*b]
+                .duration()
+                .partial_cmp(&items[*a].duration())
+                .unwrap_or(Ordering::Equal)
+        });
+        any.truncate(MAX_ANCHORS);
+        anchor_idx = any;
+    } else if anchor_idx.len() > MAX_ANCHORS {
+        anchor_idx.sort_by(|a, b| {
+            items[*b]
+                .duration()
+                .partial_cmp(&items[*a].duration())
+                .unwrap_or(Ordering::Equal)
+        });
+        anchor_idx.truncate(MAX_ANCHORS);
+    }
+
+    if anchor_idx.is_empty() {
+        return Err("No speaker turns found.".to_string());
+    }
+
+    let embeddings: Vec<Vec<f32>> = anchor_idx
+        .iter()
+        .map(|&i| items[i].embedding.clone().unwrap_or_default())
+        .collect();
+    let durations: Vec<f32> = anchor_idx.iter().map(|&i| items[i].duration()).collect();
+
+    let (anchor_labels, merge_distances) =
+        agglomerative_cluster(&embeddings, CLUSTER_DIST, target_k, AUTO_SPEAKER_CAP);
+
+    let keep = if target_k.is_none() {
+        keep_cluster_mask(&anchor_labels, &durations, MIN_CLUSTER_S)
+    } else {
+        vec![true; anchor_labels.iter().copied().max().unwrap_or(0) + 1]
+    };
+
+    let centroids = centroids_from_kept(&embeddings, &anchor_labels, &keep);
+    if centroids.is_empty() {
+        return Err("No speaker turns found.".to_string());
+    }
+
+    let mut seg_labels: Vec<Option<usize>> = vec![None; items.len()];
+    for (i, item) in items.iter().enumerate() {
+        let Some(emb) = item.embedding.as_deref() else {
+            continue;
+        };
+        seg_labels[i] = Some(nearest_centroid(emb, &centroids));
+    }
+    fill_nearest_in_time(&mut seg_labels, items);
+
+    let mut turns: Vec<(f32, f32, usize)> = items
+        .iter()
+        .zip(seg_labels.iter())
+        .filter_map(|(item, lab)| lab.map(|l| (item.start, item.end, l)))
+        .collect();
+    turns = polish_turns(turns);
+
+    let mut acc: HashMap<usize, f32> = HashMap::new();
+    for &(start, end, id) in &turns {
+        *acc.entry(id).or_insert(0.0) += (end - start).max(0.0);
+    }
+    let mut ids: Vec<usize> = acc.keys().copied().collect();
+    ids.sort_unstable();
+    let speech_per_cluster: Vec<f32> = ids.into_iter().map(|id| acc[&id]).collect();
+
+    let first_turns = turns.iter().copied().take(40).collect();
+    let stats = DiarizeStats {
+        n_segments: items.len(),
+        duration_hist,
+        n_with_embed,
+        n_anchors: anchor_idx.len(),
+        merge_distances,
+        n_clusters: speech_per_cluster.len(),
+        speech_per_cluster,
+        first_turns,
+    };
+    Ok((turns, stats))
+}
+
+fn duration_histogram(durs: impl IntoIterator<Item = f32>) -> [usize; 5] {
+    let mut hist = [0usize; 5];
+    for d in durs {
+        let slot = if d < MIN_EMBED_S {
+            0
+        } else if d < MIN_ANCHOR_S {
+            1
+        } else if d < 5.0 {
+            2
+        } else if d < 10.0 {
+            3
+        } else {
+            4
+        };
+        hist[slot] += 1;
+    }
+    hist
+}
+
+fn l2_normalize(v: &mut [f32]) {
+    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if n > 1e-12 {
+        let inv = 1.0 / n;
+        for x in v {
+            *x *= inv;
+        }
+    }
+}
+
+fn cosine_dist(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len().min(b.len());
+    let mut dot = 0.0f32;
+    for i in 0..n {
+        dot += a[i] * b[i];
+    }
+    1.0 - dot
+}
+
+/// Average-linkage agglomerative clustering on L2-normalised embeddings.
+///
+/// `target_k = Some(k)` cuts the dendrogram at exactly `k` clusters (or `n`
+/// if there are fewer points). `None` merges while the closest pair is under
+/// `max_dist`, then keeps merging until at most `cap` clusters remain.
+fn agglomerative_cluster(
+    embeddings: &[Vec<f32>],
+    max_dist: f32,
+    target_k: Option<usize>,
+    cap: usize,
+) -> (Vec<usize>, Vec<f32>) {
+    let n = embeddings.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    if n == 1 {
+        return (vec![0], Vec::new());
+    }
+
+    let mut live = vec![true; n];
+    let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    let mut pair = vec![0.0f32; n * n];
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = cosine_dist(&embeddings[i], &embeddings[j]);
+            pair[i * n + j] = d;
+            pair[j * n + i] = d;
+        }
+    }
+    let mut cdist = pair.clone();
+    let mut n_live = n;
+    let mut merges = Vec::new();
+    let floor = target_k.unwrap_or(1).clamp(1, n);
+
+    loop {
+        if n_live <= floor {
+            break;
+        }
+        let mut best = f32::INFINITY;
+        let mut bi = 0usize;
+        let mut bj = 0usize;
+        for i in 0..n {
+            if !live[i] {
+                continue;
+            }
+            for j in (i + 1)..n {
+                if !live[j] {
+                    continue;
+                }
+                let d = cdist[i * n + j];
+                if d < best {
+                    best = d;
+                    bi = i;
+                    bj = j;
+                }
+            }
+        }
+        if !best.is_finite() {
+            break;
+        }
+        if target_k.is_none() && n_live <= cap && best >= max_dist {
+            break;
+        }
+
+        merges.push(best);
+        let other = std::mem::take(&mut members[bj]);
+        live[bj] = false;
+        n_live -= 1;
+        members[bi].extend(other);
+
+        for k in 0..n {
+            if !live[k] || k == bi {
+                continue;
+            }
+            let mut sum = 0.0f32;
+            let mut count = 0u32;
+            for &a in &members[bi] {
+                for &b in &members[k] {
+                    sum += pair[a * n + b];
+                    count += 1;
+                }
+            }
+            let d = if count == 0 { 0.0 } else { sum / count as f32 };
+            cdist[bi * n + k] = d;
+            cdist[k * n + bi] = d;
+        }
+    }
+
+    let mut labels = vec![0usize; n];
+    let mut next = 0usize;
+    for (i, live_i) in live.iter().enumerate() {
+        if !live_i {
+            continue;
+        }
+        let id = next;
+        next += 1;
+        for &p in &members[i] {
+            labels[p] = id;
+        }
+    }
+    (labels, merges)
+}
+
+fn keep_cluster_mask(labels: &[usize], durations: &[f32], min_s: f32) -> Vec<bool> {
+    let k = labels.iter().copied().max().unwrap_or(0) + 1;
+    let mut tot = vec![0.0f32; k];
+    for (&lab, &d) in labels.iter().zip(durations.iter()) {
+        if lab < k {
+            tot[lab] += d;
+        }
+    }
+    let mut keep: Vec<bool> = tot.iter().map(|&t| t >= min_s).collect();
+    if !keep.iter().any(|&kept| kept) {
+        if let Some((i, _)) = tot
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(Ordering::Equal))
+        {
+            keep[i] = true;
+        }
+    }
+    keep
+}
+
+fn centroids_from_kept(embeddings: &[Vec<f32>], labels: &[usize], keep: &[bool]) -> Vec<Vec<f32>> {
+    let dim = embeddings.first().map(|e| e.len()).unwrap_or(0);
+    if dim == 0 {
+        return Vec::new();
+    }
+    let k = keep.len();
+    let mut sums = vec![vec![0.0f32; dim]; k];
+    let mut counts = vec![0u32; k];
+    for (emb, &lab) in embeddings.iter().zip(labels.iter()) {
+        if lab >= k || !keep[lab] {
+            continue;
+        }
+        counts[lab] += 1;
+        for (s, x) in sums[lab].iter_mut().zip(emb.iter()) {
+            *s += *x;
+        }
+    }
+    let mut centroids = Vec::new();
+    for (i, (sum, &c)) in sums.iter().zip(counts.iter()).enumerate() {
+        if c == 0 || !keep[i] {
+            continue;
+        }
+        let mut v: Vec<f32> = sum.iter().map(|x| x / c as f32).collect();
+        l2_normalize(&mut v);
+        centroids.push(v);
+    }
+    centroids
+}
+
+fn nearest_centroid(emb: &[f32], centroids: &[Vec<f32>]) -> usize {
+    let mut best = 0usize;
+    let mut best_d = f32::MAX;
+    for (i, c) in centroids.iter().enumerate() {
+        let d = cosine_dist(emb, c);
+        if d < best_d {
+            best_d = d;
+            best = i;
+        }
+    }
+    best
+}
+
+fn fill_nearest_in_time(labels: &mut [Option<usize>], items: &[SegEmb]) {
+    let labeled: Vec<usize> = labels
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| l.map(|_| i))
+        .collect();
+    if labeled.is_empty() {
+        return;
+    }
+    for i in 0..labels.len() {
+        if labels[i].is_some() {
+            continue;
+        }
+        let mut best = labeled[0];
+        let mut best_d = f32::MAX;
+        for &j in &labeled {
+            let d = interval_gap(items[i].start, items[i].end, items[j].start, items[j].end)
+                .min((items[i].mid() - items[j].mid()).abs());
+            if d < best_d {
+                best_d = d;
+                best = j;
+            }
+        }
+        labels[i] = labels[best];
+    }
+}
+
+fn interval_gap(a0: f32, a1: f32, b0: f32, b1: f32) -> f32 {
+    if a1 < b0 {
+        b0 - a1
+    } else if b1 < a0 {
+        a0 - b1
+    } else {
+        0.0
+    }
+}
+
+fn polish_turns(mut turns: Vec<(f32, f32, usize)>) -> Vec<(f32, f32, usize)> {
+    if turns.is_empty() {
+        return turns;
+    }
+    turns.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    turns = merge_adjacent_turns(turns);
+    turns = absorb_short_turns(turns, MIN_TURN_S);
+    turns = merge_adjacent_turns(turns);
+    renumber_by_first_appearance(&mut turns);
+    turns
+}
+
+fn merge_adjacent_turns(turns: Vec<(f32, f32, usize)>) -> Vec<(f32, f32, usize)> {
+    let mut out: Vec<(f32, f32, usize)> = Vec::with_capacity(turns.len());
+    for t in turns {
+        if let Some(last) = out.last_mut() {
+            if last.2 == t.2 {
+                last.1 = last.1.max(t.1);
+                continue;
+            }
+        }
+        out.push(t);
+    }
+    out
+}
+
+fn absorb_short_turns(mut turns: Vec<(f32, f32, usize)>, min_s: f32) -> Vec<(f32, f32, usize)> {
+    let mut i = 0;
+    while i < turns.len() {
+        if turns.len() == 1 {
+            break;
+        }
+        let dur = (turns[i].1 - turns[i].0).max(0.0);
+        if dur >= min_s {
+            i += 1;
+            continue;
+        }
+        let prev_dur = if i > 0 {
+            (turns[i - 1].1 - turns[i - 1].0).max(0.0)
+        } else {
+            0.0
+        };
+        let next_dur = if i + 1 < turns.len() {
+            (turns[i + 1].1 - turns[i + 1].0).max(0.0)
+        } else {
+            0.0
+        };
+        let merge_into_prev = i > 0 && (i + 1 == turns.len() || prev_dur >= next_dur);
+        if merge_into_prev {
+            turns[i - 1].1 = turns[i - 1].1.max(turns[i].1);
+            turns.remove(i);
+            if i < turns.len() && turns[i - 1].2 == turns[i].2 {
+                turns[i - 1].1 = turns[i - 1].1.max(turns[i].1);
+                turns.remove(i);
+            }
+        } else if i + 1 < turns.len() {
+            turns[i + 1].0 = turns[i + 1].0.min(turns[i].0);
+            turns.remove(i);
+            if i > 0 && turns[i - 1].2 == turns[i].2 {
+                turns[i - 1].1 = turns[i - 1].1.max(turns[i].1);
+                turns.remove(i);
+                i = i.saturating_sub(1);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    turns
+}
+
+fn renumber_by_first_appearance(turns: &mut [(f32, f32, usize)]) {
+    let mut map = HashMap::new();
+    let mut next = 1usize;
+    for t in turns.iter_mut() {
+        let id = *map.entry(t.2).or_insert_with(|| {
+            let id = next;
+            next += 1;
+            id
+        });
+        t.2 = id;
+    }
+}
+
+/// Local copy of pyannote-rs 0.3.4 `get_segments` with upstream bugs fixed,
+/// plus a cut on every powerset class change and at each 10 s window boundary.
+///
 /// 1. i16 samples must be scaled to [-1, 1] or the ONNX model classifies every
 ///    frame as non-speech (thewh1teagle/pyannote-rs#28).
-/// 2. Speech that lasts until EOF was never flushed as a segment.
+/// 2. Speech that lasts until EOF is flushed.
 /// 3. The original `from_fn` stopped when a 10 s window produced no *closed*
 ///    segment (typical for a long opening utterance), dropping the rest.
+/// 4. Local speaker indices are only valid inside one window, so a turn never
+///    spans a window boundary. Overlap classes (4–6) are marked, not treated
+///    as a third speaker.
 fn speech_segments(
     samples: &[i16],
     sample_rate: u32,
@@ -159,14 +649,20 @@ fn speech_segments(
 
     let mut padded = samples.to_vec();
     let rem = samples.len() % window_size;
-    padded.extend(std::iter::repeat_n(0, window_size - rem));
+    if rem != 0 {
+        padded.extend(std::iter::repeat_n(0, window_size - rem));
+    }
+    if padded.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let mut is_speeching = false;
+    let mut cur_class: Option<usize> = None;
     let mut offset = FRAME_START;
     let mut start_offset = 0.0_f64;
+    let mut start_window = 0usize;
     let mut out = Vec::new();
 
-    for start in (0..padded.len()).step_by(window_size) {
+    for (window_i, start) in (0..padded.len()).step_by(window_size).enumerate() {
         if abort() {
             return Err("Cancelled.".to_string());
         }
@@ -192,36 +688,77 @@ fn speech_segments(
         for row in view.outer_iter() {
             for sub_row in row.axis_iter(Axis(0)) {
                 let max_index = argmax(sub_row.iter().copied())?;
-                if max_index != 0 {
-                    if !is_speeching {
+                let speech_class = if max_index == 0 {
+                    None
+                } else {
+                    Some(max_index)
+                };
+                match (cur_class, speech_class) {
+                    (None, None) => {}
+                    (None, Some(c)) => {
                         start_offset = offset as f64;
-                        is_speeching = true;
+                        start_window = window_i;
+                        cur_class = Some(c);
                     }
-                } else if is_speeching {
-                    is_speeching = false;
-                    out.push(make_seg(
-                        start_offset,
-                        offset as f64,
-                        sample_rate,
-                        samples.len(),
-                        &padded,
-                    ));
+                    (Some(c), Some(d)) if c == d => {}
+                    (Some(c), new) => {
+                        out.push(make_seg(
+                            start_offset,
+                            offset as f64,
+                            sample_rate,
+                            samples.len(),
+                            &padded,
+                            c,
+                            start_window,
+                        ));
+                        if let Some(d) = new {
+                            start_offset = offset as f64;
+                            start_window = window_i;
+                            cur_class = Some(d);
+                        } else {
+                            cur_class = None;
+                        }
+                    }
                 }
                 offset += FRAME_SIZE;
             }
         }
+
+        // Local speaker indices do not carry across the 10 s window.
+        if let Some(c) = cur_class.take() {
+            out.push(make_seg(
+                start_offset,
+                offset as f64,
+                sample_rate,
+                samples.len(),
+                &padded,
+                c,
+                start_window,
+            ));
+        }
     }
 
-    if is_speeching {
-        out.push(make_seg(
-            start_offset,
-            offset as f64,
-            sample_rate,
-            samples.len(),
-            &padded,
-        ));
+    Ok(merge_short_gaps(out))
+}
+
+fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
+    let mut out: Vec<SpeechSeg> = Vec::with_capacity(segs.len());
+    for seg in segs {
+        if let Some(last) = out.last_mut() {
+            let gap = seg.start - last.end;
+            if last.window == seg.window
+                && last.class == seg.class
+                && gap >= 0.0
+                && gap < MERGE_GAP_S
+            {
+                last.end = seg.end;
+                last.samples.extend(seg.samples);
+                continue;
+            }
+        }
+        out.push(seg);
     }
-    Ok(out)
+    out
 }
 
 fn make_seg(
@@ -230,6 +767,8 @@ fn make_seg(
     sample_rate: u32,
     samples_len: usize,
     padded: &[i16],
+    class: usize,
+    window: usize,
 ) -> SpeechSeg {
     let rate = sample_rate as f64;
     let start = start_offset / rate;
@@ -246,6 +785,9 @@ fn make_seg(
         start: start as f32,
         end: end as f32,
         samples: slice.to_vec(),
+        class: class as u8,
+        overlap: is_overlap_class(class),
+        window,
     }
 }
 
@@ -280,9 +822,48 @@ fn seg_session(path: &Path) -> Result<Session, String> {
         .map_err(|e| format!("Diarization session: {e}"))
 }
 
+#[allow(dead_code)]
+fn format_diarize_report(stats: &DiarizeStats) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "segments: {}  with_embed: {}  anchors: {}  clusters: {}\n",
+        stats.n_segments, stats.n_with_embed, stats.n_anchors, stats.n_clusters
+    ));
+    s.push_str(&format!(
+        "duration hist [<0.4, 0.4–1.5, 1.5–5, 5–10, >10]: {:?}\n",
+        stats.duration_hist
+    ));
+    let n = stats.merge_distances.len();
+    let preview = stats.merge_distances.iter().take(24);
+    s.push_str(&format!("merge distances ({n}):"));
+    for d in preview {
+        s.push_str(&format!(" {d:.3}"));
+    }
+    if n > 24 {
+        s.push_str(" …");
+    }
+    s.push('\n');
+    s.push_str("speech seconds per speaker:");
+    for (i, sec) in stats.speech_per_cluster.iter().enumerate() {
+        s.push_str(&format!("  {}: {sec:.1}s", i + 1));
+    }
+    s.push('\n');
+    s.push_str("first turns:\n");
+    for (start, end, id) in &stats.first_turns {
+        s.push_str(&format!("  [{start:8.2}–{end:8.2}] speaker {id}\n"));
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{argmax, make_seg, to_i16};
+    use super::*;
+
+    fn vec2(x: f32, y: f32) -> Vec<f32> {
+        let mut v = vec![x, y];
+        l2_normalize(&mut v);
+        v
+    }
 
     #[test]
     fn f32_to_i16_clamps() {
@@ -298,9 +879,163 @@ mod tests {
     #[test]
     fn make_seg_clamps_to_original_length() {
         let padded = vec![1_i16, 2, 3, 4, 0, 0];
-        let seg = make_seg(0.0, 4.0, 2, 4, &padded);
+        let seg = make_seg(0.0, 4.0, 2, 4, &padded, 1, 0);
         assert_eq!(seg.samples, vec![1, 2, 3, 4]);
         assert!((seg.start - 0.0).abs() < f32::EPSILON);
         assert!((seg.end - 2.0).abs() < f32::EPSILON);
+        assert_eq!(seg.class, 1);
+        assert!(!seg.overlap);
+        assert_eq!(seg.window, 0);
+    }
+
+    #[test]
+    fn overlap_classes_are_four_through_six() {
+        assert!(!is_overlap_class(1));
+        assert!(!is_overlap_class(3));
+        assert!(is_overlap_class(4));
+        assert!(is_overlap_class(6));
+        let padded = vec![1_i16, 2];
+        let seg = make_seg(0.0, 2.0, 1, 2, &padded, 5, 1);
+        assert!(seg.overlap);
+    }
+
+    #[test]
+    fn merge_short_gaps_same_window_and_class() {
+        let a = SpeechSeg {
+            start: 0.0,
+            end: 1.0,
+            samples: vec![1, 2],
+            class: 1,
+            overlap: false,
+            window: 0,
+        };
+        let b = SpeechSeg {
+            start: 1.1,
+            end: 2.0,
+            samples: vec![3],
+            class: 1,
+            overlap: false,
+            window: 0,
+        };
+        let merged = merge_short_gaps(vec![a, b]);
+        assert_eq!(merged.len(), 1);
+        assert!((merged[0].end - 2.0).abs() < f32::EPSILON);
+        assert_eq!(merged[0].samples, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn merge_short_gaps_skips_other_window() {
+        let a = SpeechSeg {
+            start: 0.0,
+            end: 1.0,
+            samples: vec![1],
+            class: 1,
+            overlap: false,
+            window: 0,
+        };
+        let b = SpeechSeg {
+            start: 1.1,
+            end: 2.0,
+            samples: vec![2],
+            class: 1,
+            overlap: false,
+            window: 1,
+        };
+        assert_eq!(merge_short_gaps(vec![a, b]).len(), 2);
+    }
+
+    #[test]
+    fn agglomerative_separates_two_blobs() {
+        let embs = vec![
+            vec2(1.0, 0.0),
+            vec2(0.99, 0.02),
+            vec2(1.0, 0.03),
+            vec2(0.0, 1.0),
+            vec2(0.02, 0.99),
+            vec2(0.03, 1.0),
+        ];
+        let (labels, _) = agglomerative_cluster(&embs, CLUSTER_DIST, None, AUTO_SPEAKER_CAP);
+        let n = labels.iter().copied().max().unwrap() + 1;
+        assert_eq!(n, 2);
+        assert_eq!(labels[0], labels[1]);
+        assert_eq!(labels[0], labels[2]);
+        assert_eq!(labels[3], labels[4]);
+        assert_eq!(labels[3], labels[5]);
+        assert_ne!(labels[0], labels[3]);
+    }
+
+    #[test]
+    fn agglomerative_target_k_cuts_exactly() {
+        let embs = vec![
+            vec2(1.0, 0.0),
+            vec2(0.9, 0.1),
+            vec2(0.0, 1.0),
+            vec2(0.1, 0.9),
+            vec2(-1.0, 0.0),
+            vec2(-0.9, 0.1),
+        ];
+        let (labels, _) = agglomerative_cluster(&embs, 0.01, Some(2), AUTO_SPEAKER_CAP);
+        let n = labels.iter().copied().max().unwrap() + 1;
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn dissolve_drops_tiny_cluster() {
+        let labels = vec![0, 0, 0, 1];
+        let durs = vec![5.0, 5.0, 5.0, 0.4];
+        let keep = keep_cluster_mask(&labels, &durs, MIN_CLUSTER_S);
+        assert!(keep[0]);
+        assert!(!keep[1]);
+    }
+
+    #[test]
+    fn absorb_short_turn_into_neighbours() {
+        let turns = vec![(0.0, 5.0, 0), (5.0, 5.2, 1), (5.2, 10.0, 0)];
+        let out = polish_turns(turns);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].2, 1);
+        assert!((out[0].0 - 0.0).abs() < f32::EPSILON);
+        assert!((out[0].1 - 10.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn renumber_follows_first_appearance() {
+        let mut turns = vec![(0.0, 1.0, 7), (1.0, 2.0, 3), (2.0, 3.0, 7)];
+        renumber_by_first_appearance(&mut turns);
+        assert_eq!(turns, vec![(0.0, 1.0, 1), (1.0, 2.0, 2), (2.0, 3.0, 1)]);
+    }
+
+    /// Set `VOXMD_DIARIZE_AUDIO` to an episode file to print clustering stats.
+    /// Without the variable this is a no-op so the suite stays green.
+    #[test]
+    fn diarize_report() {
+        let Some(path) = std::env::var_os("VOXMD_DIARIZE_AUDIO") else {
+            return;
+        };
+        if path.is_empty() {
+            return;
+        }
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_file(),
+            "VOXMD_DIARIZE_AUDIO is not a file: {}",
+            path.display()
+        );
+        let seg_path = cached(SEG_FILE);
+        let emb_path = cached(EMB_FILE);
+        assert!(
+            seg_path.is_file() && emb_path.is_file(),
+            "diarization models missing in {}",
+            cache_dir().display()
+        );
+        let samples = crate::audio::decode_file_to_mono_16k(&path, || false)
+            .expect("decode audio for diarize_report");
+        let max_speakers: u8 = std::env::var("VOXMD_DIARIZE_SPEAKERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let (_turns, stats) = run_diarize(&samples, &seg_path, &emb_path, max_speakers, &|| false)
+            .expect("run diarization");
+        eprintln!("{}", format_diarize_report(&stats));
     }
 }
