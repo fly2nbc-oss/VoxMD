@@ -749,7 +749,9 @@ fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
     for seg in segs {
         if let Some(last) = out.last_mut() {
             let gap = seg.start - last.end;
-            if last.window == seg.window && last.class == seg.class && (0.0..MERGE_GAP_S).contains(&gap)
+            if last.window == seg.window
+                && last.class == seg.class
+                && (0.0..MERGE_GAP_S).contains(&gap)
             {
                 last.end = seg.end;
                 last.samples.extend(seg.samples);
