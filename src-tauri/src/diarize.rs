@@ -38,6 +38,9 @@ const MIN_CLUSTER_S: f32 = 3.0;
 /// Turns shorter than this are absorbed into the longer neighbour.
 const MIN_TURN_S: f32 = 0.4;
 
+/// `(start_s, end_s, speaker_id)` — 1-based after `polish_turns`.
+type SpeakerTurn = (f32, f32, usize);
+
 /// Powerset classes 4–6 are two simultaneous speakers inside a 10 s window.
 fn is_overlap_class(class: usize) -> bool {
     class >= 4
@@ -119,7 +122,7 @@ struct DiarizeStats {
     merge_distances: Vec<f32>,
     n_clusters: usize,
     speech_per_cluster: Vec<f32>,
-    first_turns: Vec<(f32, f32, usize)>,
+    first_turns: Vec<SpeakerTurn>,
 }
 
 /// Runs pyannote segmentation + embeddings and labels Whisper lines.
@@ -154,7 +157,7 @@ fn run_diarize(
     emb_path: &Path,
     max_speakers: u8,
     abort: &impl Fn() -> bool,
-) -> Result<(Vec<(f32, f32, usize)>, DiarizeStats), String> {
+) -> Result<(Vec<SpeakerTurn>, DiarizeStats), String> {
     if samples_f32.is_empty() {
         return Err("No audio for diarization.".to_string());
     }
@@ -203,7 +206,7 @@ fn cluster_and_assign(
     items: &[SegEmb],
     target_k: Option<usize>,
     duration_hist: [usize; 5],
-) -> Result<(Vec<(f32, f32, usize)>, DiarizeStats), String> {
+) -> Result<(Vec<SpeakerTurn>, DiarizeStats), String> {
     let n_with_embed = items.iter().filter(|s| s.embedding.is_some()).count();
     let mut anchor_idx: Vec<usize> = items
         .iter()
@@ -271,7 +274,7 @@ fn cluster_and_assign(
     }
     fill_nearest_in_time(&mut seg_labels, items);
 
-    let mut turns: Vec<(f32, f32, usize)> = items
+    let mut turns: Vec<SpeakerTurn> = items
         .iter()
         .zip(seg_labels.iter())
         .filter_map(|(item, lab)| lab.map(|l| (item.start, item.end, l)))
@@ -541,7 +544,7 @@ fn interval_gap(a0: f32, a1: f32, b0: f32, b1: f32) -> f32 {
     }
 }
 
-fn polish_turns(mut turns: Vec<(f32, f32, usize)>) -> Vec<(f32, f32, usize)> {
+fn polish_turns(mut turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
     if turns.is_empty() {
         return turns;
     }
@@ -553,8 +556,8 @@ fn polish_turns(mut turns: Vec<(f32, f32, usize)>) -> Vec<(f32, f32, usize)> {
     turns
 }
 
-fn merge_adjacent_turns(turns: Vec<(f32, f32, usize)>) -> Vec<(f32, f32, usize)> {
-    let mut out: Vec<(f32, f32, usize)> = Vec::with_capacity(turns.len());
+fn merge_adjacent_turns(turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
+    let mut out: Vec<SpeakerTurn> = Vec::with_capacity(turns.len());
     for t in turns {
         if let Some(last) = out.last_mut() {
             if last.2 == t.2 {
@@ -567,7 +570,7 @@ fn merge_adjacent_turns(turns: Vec<(f32, f32, usize)>) -> Vec<(f32, f32, usize)>
     out
 }
 
-fn absorb_short_turns(mut turns: Vec<(f32, f32, usize)>, min_s: f32) -> Vec<(f32, f32, usize)> {
+fn absorb_short_turns(mut turns: Vec<SpeakerTurn>, min_s: f32) -> Vec<SpeakerTurn> {
     let mut i = 0;
     while i < turns.len() {
         if turns.len() == 1 {
@@ -611,7 +614,7 @@ fn absorb_short_turns(mut turns: Vec<(f32, f32, usize)>, min_s: f32) -> Vec<(f32
     turns
 }
 
-fn renumber_by_first_appearance(turns: &mut [(f32, f32, usize)]) {
+fn renumber_by_first_appearance(turns: &mut [SpeakerTurn]) {
     let mut map = HashMap::new();
     let mut next = 1usize;
     for t in turns.iter_mut() {
@@ -746,10 +749,7 @@ fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
     for seg in segs {
         if let Some(last) = out.last_mut() {
             let gap = seg.start - last.end;
-            if last.window == seg.window
-                && last.class == seg.class
-                && gap >= 0.0
-                && gap < MERGE_GAP_S
+            if last.window == seg.window && last.class == seg.class && (0.0..MERGE_GAP_S).contains(&gap)
             {
                 last.end = seg.end;
                 last.samples.extend(seg.samples);
