@@ -53,11 +53,11 @@ describe("catalogues", () => {
 
 describe("format", () => {
   it("substitutes named placeholders", () => {
-    expect(format(en, "status.overall", { done: 2, total: 5 })).toBe("Overall: 2 / 5 done (MD)");
+    expect(format(en, "settings.unsavedMany", { count: 3 })).toBe("3 unsaved changes");
   });
 
   it("leaves an unmatched placeholder visible instead of blanking it", () => {
-    expect(format(en, "status.overall", { done: 2 })).toContain("{total}");
+    expect(format(en, "status.counts", {})).toContain("{waiting}");
   });
 
   it("returns the template untouched when no params are given", () => {

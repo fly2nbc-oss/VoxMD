@@ -25,6 +25,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ### Changed
 
+- **Queue view reworked.** What the app is working on now sits in its own band above the list — **two entries**, because the pipeline transcribes one file while summarising the previous, which the flat table never showed. The Details column is gone: it repeated the status badge on every waiting row. Entry names are one line instead of wrapping to two, so roughly twice as many fit on screen. The footer counts in words ("99 in der Warteschlange · 1 fertig · 1 fehlgeschlagen") instead of "Overall: 0 / 1 done (MD)", which counted only the running batch and contradicted the queue beside it.
 - **Settings reworked around finding things.** The drawer is up to 1024 px wide with a search field that matches translated labels *and* technical keywords ("vulkan" finds the GPU row, "schlussel" finds "Schlüssel"), a rail of four sections — Appearance, Transcription, Summary, Dictation — each showing its current value, a dot on sections carrying an unsaved edit, and a count in the footer. Speakers moved into Transcription; nothing hides behind an "Advanced" disclosure any more. Replaces four sections stacked in a 440 px column.
 - **About lives in Settings.** The separate About dialog and its toolbar button are gone; it is the last rail entry, below a divider.
 - Keyboard shortcuts are a table instead of one run-on sentence.

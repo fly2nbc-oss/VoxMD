@@ -1,7 +1,7 @@
-import { FileText, FolderOpen } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useT } from "../i18n/I18nProvider";
-import { badgeForStage, detailsForRow, outputPathOf } from "../lib/jobs";
+import { badgeForStage, outputPathOf } from "../lib/jobs";
 import type { JobRow, QueueItem } from "../types";
 
 interface Props {
@@ -57,14 +57,11 @@ export function QueueTable({
                 aria-label={t("queue.selectAll")}
               />
             </th>
-            <th scope="col" style={{ width: "40%" }}>
-              {t("queue.colFile")}
-            </th>
-            <th scope="col" style={{ width: "90px" }}>
+            <th scope="col">{t("queue.colFile")}</th>
+            <th scope="col" style={{ width: 150 }}>
               {t("queue.colStatus")}
             </th>
-            <th scope="col">{t("queue.colDetails")}</th>
-            <th scope="col" style={{ width: 72 }}>
+            <th scope="col" style={{ width: 84 }}>
               <span className="visually-hidden">{t("queue.colOutput")}</span>
             </th>
           </tr>
@@ -89,22 +86,33 @@ export function QueueTable({
                     aria-label={t("queue.select", { name: item.displayName })}
                   />
                 </td>
-                <td className="mono">{item.displayName}</td>
+                {/* One line, ellipsised. Podcast titles wrap to two lines
+                    otherwise, which halves how many entries fit on screen. */}
+                <td className="mono queue-name" title={item.displayName}>
+                  {item.displayName}
+                </td>
                 <td>
                   <span className={`badge ${badge.className}`}>{badge.label}</span>
+                  {/* A failure says what happened right here; every other stage
+                      is already spelled out by the badge or the In-progress
+                      band, which is why the Details column is gone. */}
+                  {job.stage === "error" && job.message ? (
+                    <span className="queue-error" title={job.message}>
+                      {job.message}
+                    </span>
+                  ) : null}
                 </td>
-                <td className="mono details-cell">{detailsForRow(job, t)}</td>
                 <td className="row-actions">
                   {outputPath ? (
                     <>
                       <button
                         type="button"
-                        className="icon-btn"
+                        className="btn-ghost btn-sm"
                         title={t("queue.open", { path: outputPath })}
                         aria-label={t("queue.openAria", { name: item.displayName })}
                         onClick={() => onOpenResult(outputPath)}
                       >
-                        <FileText size={16} aria-hidden />
+                        {t("queue.open2")}
                       </button>
                       <button
                         type="button"

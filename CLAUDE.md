@@ -75,7 +75,11 @@ Backend messages (Whisper, the LLM call, file paths) stay English: they cross IP
 
 UI layout (not all in the settings drawer):
 
-- Toolbar: Queue/Dictation mode; Files, Podcast, Remove, Start; Markdown toggles (meta/summary/transcript); delete-audio trash toggle; Settings; About.
+- Toolbar: Queue/Dictation mode; Files, Podcast, Remove, Start; Markdown toggles (meta/summary/transcript); delete-audio trash toggle; Settings.
+- Queue view, top to bottom: `ErrorPanel` (failures, untruncated), `ActiveJobs`, `QueueTable`, `StatusBar`.
+- **`ActiveJobs` shows up to TWO entries, and that is the pipeline's contract, not a display choice** — the mpsc channel of capacity 1 lets Whisper run one file ahead of the summary. Anything that renders "the current job" as one entry is wrong. Only `download` and `whisper` carry a percentage (`jobPercent`); `diarize` and `llm` get an indeterminate marker rather than a fabricated bar.
+- `QueueTable` has no Details column: for a waiting row it repeated the badge ("Wait" / "Waiting in queue…"), and for an active one the band now says it. Names are one ellipsised line (`.queue-name` needs `max-width: 0` for `text-overflow` to apply in a table cell) — wrapped podcast titles used to halve how many rows fit.
+- The footer counts in words via `queueCounts` ("99 in der Warteschlange · 1 fertig"). It used to read "Overall: 0 / 1 done (MD)", which counted only the running batch and so contradicted a queue holding ninety-nine.
 - Settings is a **wide drawer with a search rail** (`min(1024px, 100%)`). Rail order is Appearance / Transcription / Summary / Dictation, then **About** below a divider — the About dialog was folded in, there is no separate About surface or toolbar button. `.settings-body` is `overflow: hidden` on purpose, so a field that no longer fits shows up immediately instead of silently reintroducing a scroll; `.settings-panel` keeps `auto` as the safety valve for very short windows.
 - Speakers is part of **Transcription**: both describe what falls out of the same local pass over the audio.
 - Each rail row shows its current value, and a dot when that section holds an unsaved edit. The footer counts unsaved fields. This is what `useConfigStore` exposes `saved` for — the last-persisted config, diffed against the live one by `changedFields` / `changedSections`.

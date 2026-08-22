@@ -1,0 +1,47 @@
+{
+  "artboards": [
+    {
+      "file": "Aktuell.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1180,
+      "h": 760,
+      "title": "Heute"
+    },
+    {
+      "file": "Main.dc.html",
+      "x": 1320,
+      "y": 0,
+      "w": 1180,
+      "h": 760,
+      "title": "Vorschlag"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "befund-1",
+      "x": 14,
+      "y": -388,
+      "w": 560,
+      "text": "SECHS BEFUNDE — aus dem Code und deinem Screenshot\n\n1. STATUS UND DETAILS SAGEN DASSELBE. „Wait“ neben „Waiting in queue…“, bei zwölf von dreizehn Zeilen. Zwei Spalten, zusammen gut 40 % der Tabellenbreite, tragen null Information.\n\n2. DIE EINE ZEILE, DIE ARBEITET, HEBT SICH NICHT AB. Sie hat dieselbe Höhe, denselben Hintergrund und dieselbe Zeilenhöhe wie die zwölf wartenden. Genau sie will man sehen.\n\n3. FEHLERMELDUNGEN WERDEN ABGESCHNITTEN. `.status-text` ist `white-space: nowrap` mit `max-width: 45%`. Aus dem Absturz wurde „attempted to u…“ — der Rest war nicht lesbar."
+    },
+    {
+      "id": "befund-2",
+      "x": 621,
+      "y": -343,
+      "w": 560,
+      "text": "4. „OVERALL: 0 / 1 DONE (MD)“ IST KEIN SATZ. „(MD)“ meint Markdown. Und 99 Einträge stehen in der Liste, während die Fußzeile von 1 spricht — sie zählt nur den laufenden Stapel, was ohne Erklärung wie ein Fehler aussieht.\n\n5. DIE AUSGABESPALTE IST MEIST LEER. 72 px auf jeder Zeile, gefüllt erst wenn eine Datei fertig ist. Ihre Überschrift ist unsichtbar gesetzt.\n\n6. `VERTICAL-ALIGN: TOP` + LANGE TITEL = HOHE ZEILEN. Podcast-Namen brechen auf zwei Zeilen um, dreizehn Einträge füllen das Fenster. Bei 99 in deiner Liste ist das viel Scrollen für wenig Übersicht."
+    },
+    {
+      "id": "vorschlag",
+      "x": 1377,
+      "y": -396,
+      "w": 960,
+      "text": "WAS RECHTS ANDERS IST — gleiche Tokens, nichts neu erfunden (Segoe UI, 13 px, #3b5f8a, Radius 6/8, Zeilenpolster 9→7 px)\n\n· DIE LAUFENDEN AUFTRÄGE STEHEN ÜBER DER LISTE, mit Fortschritt und Stufe. Es sind ZWEI: Der mpsc-Kanal mit Kapazität 1 lässt Whisper eine Datei vorauslaufen, während der LLM die vorherige zusammenfasst. Die heutige Tabelle zeigt beide als gleichrangige Zeilen irgendwo in der Liste — dass zwei Dinge gleichzeitig passieren, ist daran nicht zu erkennen.\n· DETAILS-SPALTE ENTFÄLLT. Solange eine Zeile wartet, sagt die Statusmarke alles. Der Dateiname bekommt die frei gewordene Breite und wird einzeilig gekürzt — konstante Zeilenhöhe, mehr Einträge im Blick.\n· FEHLER BEKOMMEN EIN BANNER mit voller Meldung und dem betroffenen Eintrag. Die Fußzeile schneidet nichts mehr ab.\n· FUSSZEILE ZÄHLT IN KLARTEXT: „99 in der Warteschlange · 1 fertig · 1 fehlgeschlagen“.\n· ÖFFNEN STATT SYMBOLLEISTE: Die Ausgabespalte trägt bei fertigen Zeilen einen Textlink statt zweier Symbole, die 72 px dauerhaft belegen.\n\nOFFEN, BEWUSST NICHT ENTSCHIEDEN: ob eine Restzeit-Schätzung seriös berechenbar wäre. Whisper meldet Prozent, Diarisierung und LLM nicht — deshalb steht dort jetzt die Stufe („Schritt 3 von 4“, „Teil 2 von 3“) statt einer Minutenzahl, die geraten wäre."
+    }
+  ],
+  "launch": {
+    "view": "focused",
+    "file": "Main.dc.html"
+  }
+}

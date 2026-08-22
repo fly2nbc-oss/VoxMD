@@ -1,5 +1,5 @@
 import type { MessageKey } from "../i18n";
-import type { JobRow } from "../types";
+import type { JobRow, QueueItem } from "../types";
 
 type Translate = (key: MessageKey, params?: Record<string, string | number>) => string;
 
@@ -82,6 +82,58 @@ export function outputPathOf(row: JobRow): string | null {
 
 /** Stages a row can end on. Anything else means work is still in flight. */
 export const TERMINAL_STAGES = new Set(["done", "error", "skipped"]);
+
+/** Stages where the backend is actually working on the entry right now. */
+export const ACTIVE_STAGES = ["download", "whisper", "diarize", "llm"] as const;
+const ACTIVE = new Set<string>(ACTIVE_STAGES);
+
+export interface QueueCounts {
+  waiting: number;
+  running: number;
+  done: number;
+  failed: number;
+  total: number;
+}
+
+/**
+ * What the queue currently holds, for the footer.
+ *
+ * Counted over the queue itself rather than over `jobs`, which also retains
+ * rows for entries the user has since removed.
+ */
+export function queueCounts(items: QueueItem[], jobs: Record<string, JobRow>): QueueCounts {
+  const counts: QueueCounts = { waiting: 0, running: 0, done: 0, failed: 0, total: items.length };
+  for (const item of items) {
+    const stage = jobs[item.id]?.stage ?? "queued";
+    if (stage === "done") counts.done += 1;
+    else if (stage === "error") counts.failed += 1;
+    else if (ACTIVE.has(stage)) counts.running += 1;
+    // `skipped` counts as neither: it was not processed and did not fail.
+    else if (stage !== "skipped") counts.waiting += 1;
+  }
+  return counts;
+}
+
+/**
+ * The entries the backend is working on, in queue order.
+ *
+ * There can be two: the pipeline runs Whisper and the LLM concurrently through
+ * a channel of capacity one, so while file *n* is being summarised, file *n+1*
+ * is already being transcribed. A single "current job" would be wrong.
+ */
+export function activeJobs(items: QueueItem[], jobs: Record<string, JobRow>): JobRow[] {
+  return items
+    .map((item) => jobs[item.id])
+    .filter((job): job is JobRow => !!job && ACTIVE.has(job.stage));
+}
+
+/** Percentage for a row's own progress bar, or `null` when the stage has none. */
+export function jobPercent(row: JobRow): number | null {
+  if (row.stage === "download") return row.downloadPct ?? null;
+  if (row.stage === "whisper") return row.whisperPct ?? null;
+  // Diarization and the summary report stages, not percentages.
+  return null;
+}
 
 /**
  * Gives every still-running row a terminal stage once the batch is over.

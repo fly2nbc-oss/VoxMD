@@ -56,7 +56,6 @@ export const en = {
   "queue.select": "Select {name}",
   "queue.colFile": "File / Episode",
   "queue.colStatus": "Status",
-  "queue.colDetails": "Details",
   "queue.colOutput": "Output",
   "queue.open": "Open {path}",
   "queue.openAria": "Open the Markdown file for {name}",
@@ -82,9 +81,6 @@ export const en = {
   "details.llm": "Summary…",
 
   "status.downloading": "Downloading {model}…",
-  "status.overall": "Overall: {done} / {total} done (MD)",
-  "status.queuedCount": "{count} queued",
-  "status.empty": "Empty",
   "status.running": "Running",
   "status.cancelling": "Cancelling…",
   "status.modelProgress": "Model download progress",
@@ -308,6 +304,13 @@ export const en = {
   "shortcut.queue": "Queue",
   "shortcut.dictation": "Dictation",
   "msg.batchStopped": "Stopped before this entry finished.",
+  "active.title": "In progress",
+  "queue.open2": "Open",
+  "status.counts": "{waiting} queued",
+  "status.countsDone": "{done} done",
+  "status.countsFailed": "{failed} failed",
+  "status.countsSep": " · ",
+  "status.nothing": "Queue is empty",
   "msg.batchComplete": "Batch complete.",
 } as const;
 

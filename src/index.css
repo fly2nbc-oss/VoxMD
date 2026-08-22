@@ -293,10 +293,97 @@ button:disabled {
 }
 
 .table td {
-  padding: 9px 10px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--line-soft);
   font-size: 13px;
-  vertical-align: top;
+  vertical-align: middle;
+}
+
+/* One line per entry. Podcast titles wrap to two lines otherwise, which halves
+   how many rows fit — with a hundred episodes queued that is a lot of
+   scrolling for very little information. `max-width: 0` is what makes
+   `text-overflow` work on a table cell that is otherwise sized by content. */
+.queue-name {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A failure says what happened in the row itself; the full text is in the
+   error panel above, which does not truncate. */
+.queue-error {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--status-error);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the backend is working on, lifted out of the table. Two rows at most:
+   Whisper runs one file ahead of the summary. */
+.active-jobs {
+  flex-shrink: 0;
+  background: var(--accent-subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.active-job {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 8px var(--space-md);
+  color: var(--accent);
+}
+
+.active-job + .active-job {
+  border-top: 1px solid var(--line-soft);
+}
+
+.active-job > svg {
+  flex-shrink: 0;
+}
+
+.active-job-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.active-job-name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-job-stage {
+  font-size: 11.5px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-job-progress {
+  width: 180px;
+  max-width: 180px;
+  flex: 0 0 auto;
+  height: 6px;
+  background: var(--surface);
+}
+
+/* Diarization and the summary report a stage, not a percentage — an
+   indeterminate marker is honest where a bar would imply a number. */
+.active-job-spinner {
+  flex-shrink: 0;
+  color: var(--accent);
 }
 
 .table tbody tr:hover {
@@ -1076,11 +1163,6 @@ button:focus-visible,
 .about-repo-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.table td.details-cell {
-  color: var(--muted);
-  overflow-wrap: anywhere;
 }
 
 .status-slot {

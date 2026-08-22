@@ -1,8 +1,9 @@
 import { Loader2 } from "lucide-react";
 import { useT } from "../i18n/I18nProvider";
+import type { QueueCounts } from "../lib/jobs";
 
 interface Props {
-  itemCount: number;
+  counts: QueueCounts;
   overall: { completed: number; total: number } | null;
   modelDownload: { pct: number; model: string } | null;
   processing: boolean;
@@ -11,7 +12,7 @@ interface Props {
 }
 
 export function StatusBar({
-  itemCount,
+  counts,
   overall,
   modelDownload,
   processing,
@@ -22,13 +23,19 @@ export function StatusBar({
   const overallPct = overall && overall.total > 0 ? (overall.completed / overall.total) * 100 : 0;
   const pct = modelDownload ? modelDownload.pct : overallPct;
 
+  // Plain counts. "Overall: 0 / 1 done (MD)" counted only the running batch, so
+  // it read as a contradiction next to a queue holding ninety-nine entries —
+  // and "(MD)" is not a word.
+  const parts: string[] = [];
+  if (counts.waiting > 0) parts.push(t("status.counts", { waiting: counts.waiting }));
+  if (counts.done > 0) parts.push(t("status.countsDone", { done: counts.done }));
+  if (counts.failed > 0) parts.push(t("status.countsFailed", { failed: counts.failed }));
+
   const summary = modelDownload
     ? t("status.downloading", { model: modelDownload.model })
-    : overall
-      ? t("status.overall", { done: overall.completed, total: overall.total })
-      : itemCount
-        ? t("status.queuedCount", { count: itemCount })
-        : t("status.empty");
+    : parts.length > 0
+      ? parts.join(t("status.countsSep"))
+      : t("status.nothing");
 
   return (
     <footer className="meta-bar">

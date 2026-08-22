@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileAudio2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActiveJobs } from "./components/ActiveJobs";
 import { AppToolbar } from "./components/AppToolbar";
 import { DictationView } from "./components/DictationView";
 import { ErrorPanel } from "./components/ErrorPanel";
@@ -20,7 +21,7 @@ import { useTheme } from "./hooks/useTheme";
 import { I18nContext, useI18nValue } from "./i18n/I18nProvider";
 import { rememberPodcastRecent } from "./lib/configStore";
 import { summaryWouldRun } from "./lib/llmProviders";
-import { toMsg } from "./lib/jobs";
+import { activeJobs, queueCounts, toMsg } from "./lib/jobs";
 import { itemsToPersist, parseSavedQueue } from "./lib/queuePersist";
 import { AUDIO_EXTENSIONS, localItem } from "./lib/queue";
 import type {
@@ -164,7 +165,9 @@ export default function App() {
         loaded = true;
       } catch (e) {
         if (!cancelled)
-          setStatusMsg(tRef.current("msg.queueRestoreFailed", { error: toMsg(e) }));
+          setStatusMsg(
+            tRef.current("msg.queueRestoreFailed", { error: toMsg(e) }),
+          );
       } finally {
         if (!cancelled && loaded) setQueueHydrated(true);
       }
@@ -187,7 +190,9 @@ export default function App() {
       setModelInfos(await invoke<WhisperModelInfo[]>("list_whisper_models"));
     } catch (e) {
       setModelInfos([]);
-      setStatusMsg(tRef.current("msg.modelListUnavailable", { error: toMsg(e) }));
+      setStatusMsg(
+        tRef.current("msg.modelListUnavailable", { error: toMsg(e) }),
+      );
     }
   }, [setStatusMsg]);
 
@@ -209,7 +214,9 @@ export default function App() {
       } else {
         setModelInfos([]);
         setStatusMsg(
-          tRef.current("msg.modelListUnavailable", { error: toMsg(models.reason) }),
+          tRef.current("msg.modelListUnavailable", {
+            error: toMsg(models.reason),
+          }),
         );
       }
       setDetectedSystemSummaryLang(
@@ -221,7 +228,6 @@ export default function App() {
       cancelled = true;
     };
   }, [settingsOpen, setStatusMsg]);
-
 
   /** Append new items (deduplicated by id) and queue rows for them.
    *
@@ -264,6 +270,10 @@ export default function App() {
   );
 
   const dragActive = useNativeDrop(addItems, setStatusMsg, t);
+
+  const counts = useMemo(() => queueCounts(items, jobs), [items, jobs]);
+  // Up to two: the pipeline transcribes one file while summarising the previous.
+  const running = useMemo(() => activeJobs(items, jobs), [items, jobs]);
 
   const pickFiles = async () => {
     try {
@@ -654,19 +664,22 @@ export default function App() {
               onStatus={setStatusMsg}
             />
           ) : (
-            <QueueTable
-              items={items}
-              jobs={jobs}
-              selected={selected}
-              processing={processing}
-              onToggle={toggleSelect}
-              onToggleAll={toggleSelectAll}
-              onOpenResult={(p) => void openResult(p)}
-              onRevealResult={(p) => void revealResult(p)}
-            />
+            <>
+              <ActiveJobs jobs={running} />
+              <QueueTable
+                items={items}
+                jobs={jobs}
+                selected={selected}
+                processing={processing}
+                onToggle={toggleSelect}
+                onToggleAll={toggleSelectAll}
+                onOpenResult={(p) => void openResult(p)}
+                onRevealResult={(p) => void revealResult(p)}
+              />
+            </>
           )}
           <StatusBar
-            itemCount={items.length}
+            counts={counts}
             overall={overall}
             modelDownload={modelDownload}
             processing={processing || dictating}
@@ -724,7 +737,6 @@ export default function App() {
             onThemeChange={setThemeMode}
           />
         ) : null}
-
       </div>
     </I18nContext.Provider>
   );
