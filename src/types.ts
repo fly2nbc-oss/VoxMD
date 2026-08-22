@@ -78,6 +78,9 @@ export interface JobProgressPayload {
   downloadPct?: number;
   overall?: { completed: number; total: number; pct: number };
   message?: string;
+  /** Markdown the row produced (`done`) or already had (`skipped` because it
+   *  exists). Absent for a cancelled skip, which is how the two are told apart. */
+  outputPath?: string;
 }
 
 /** One row of the queue table: the latest progress payload for that item. */

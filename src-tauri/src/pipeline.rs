@@ -33,6 +33,12 @@ pub struct JobProgressPayload {
     pub overall: Option<OverallProgress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Markdown file this row produced (stage `done`) or already had (stage
+    /// `skipped` because it exists). A field rather than a substring of
+    /// `message`, so the UI does not depend on the wording, and so a skip that
+    /// has an output can be told apart from a cancelled one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -43,17 +49,39 @@ pub struct OverallProgress {
     pub pct: f32,
 }
 
+/// Live work queue plus the flag that closes it.
+///
+/// Both live under one lock because the Whisper loop's "queue is empty, I am
+/// done" decision and `append_to_batch` must not interleave: otherwise an
+/// append is acknowledged, the loop exits, and `ProcessingGuard` discards the
+/// item that was just accepted.
+struct Pending {
+    queue: VecDeque<QueueItem>,
+    closed: bool,
+}
+
 static PROCESSING: AtomicBool = AtomicBool::new(false);
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
-static PENDING: Mutex<VecDeque<QueueItem>> = Mutex::new(VecDeque::new());
+static PENDING: Mutex<Pending> = Mutex::new(Pending {
+    queue: VecDeque::new(),
+    closed: true,
+});
 static BATCH_TOTAL: AtomicUsize = AtomicUsize::new(0);
 /// Whisper jobs that have been sent to the LLM stage but not yet settled.
 /// The Whisper loop waits on this so `append_to_batch` still works while the
 /// last file is being summarized.
 static JOBS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
-fn pending_lock() -> std::sync::MutexGuard<'static, VecDeque<QueueItem>> {
+fn pending_lock() -> std::sync::MutexGuard<'static, Pending> {
     PENDING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Closes the queue and drops whatever is left. Returns the discarded items so
+/// a cancel can still report them.
+fn close_pending() -> Vec<QueueItem> {
+    let mut p = pending_lock();
+    p.closed = true;
+    p.queue.drain(..).collect()
 }
 
 pub fn is_processing() -> bool {
@@ -73,8 +101,18 @@ pub fn begin_batch() -> Result<(), String> {
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
     BATCH_TOTAL.store(0, Ordering::SeqCst);
     JOBS_IN_FLIGHT.store(0, Ordering::SeqCst);
-    pending_lock().clear();
+    let mut pending = pending_lock();
+    pending.queue.clear();
+    pending.closed = false;
     Ok(())
+}
+
+/// Gives the processing slot back without running a batch. Only for the caller
+/// of [`begin_batch`] that decides not to start after all — `run_batch` uses
+/// [`ProcessingGuard`] instead.
+pub fn release_batch() {
+    let _ = close_pending();
+    PROCESSING.store(false, Ordering::SeqCst);
 }
 
 /// Releases the processing slot on drop, so no early return (including a panic
@@ -83,7 +121,7 @@ struct ProcessingGuard;
 
 impl Drop for ProcessingGuard {
     fn drop(&mut self) {
-        pending_lock().clear();
+        let _ = close_pending();
         BATCH_TOTAL.store(0, Ordering::SeqCst);
         JOBS_IN_FLIGHT.store(0, Ordering::SeqCst);
         CANCEL_REQUESTED.store(false, Ordering::SeqCst);
@@ -94,7 +132,7 @@ impl Drop for ProcessingGuard {
 /// Push items onto the live Whisper queue. Safe to call before `run_batch` starts.
 pub fn enqueue_items(items: Vec<QueueItem>) -> usize {
     let n = items.len();
-    pending_lock().extend(items);
+    pending_lock().queue.extend(items);
     n
 }
 
@@ -102,15 +140,32 @@ pub fn append_to_batch(items: Vec<QueueItem>) -> Result<usize, String> {
     if !is_processing() {
         return Err("No batch is running.".to_string());
     }
-    Ok(enqueue_items(items))
+    let n = items.len();
+    let mut pending = pending_lock();
+    if pending.closed {
+        return Err("The batch is already finishing.".to_string());
+    }
+    pending.queue.extend(items);
+    Ok(n)
 }
 
 fn pop_pending() -> Option<QueueItem> {
-    pending_lock().pop_front()
+    pending_lock().queue.pop_front()
 }
 
 fn drain_pending() -> Vec<QueueItem> {
-    pending_lock().drain(..).collect()
+    pending_lock().queue.drain(..).collect()
+}
+
+/// Closes the queue iff it is still empty and nothing is in flight, under the
+/// same lock `append_to_batch` takes. `true` means the Whisper loop may exit.
+fn try_finish_pending() -> bool {
+    let mut pending = pending_lock();
+    if pending.queue.is_empty() && JOBS_IN_FLIGHT.load(Ordering::SeqCst) == 0 {
+        pending.closed = true;
+        return true;
+    }
+    false
 }
 
 fn sleep_guard(enabled: bool) -> Option<keepawake::KeepAwake> {
@@ -153,8 +208,12 @@ fn payload(id: &str, display_name: &str, stage: &str) -> JobProgressPayload {
         download_pct: None,
         overall: None,
         message: None,
+        output_path: None,
     }
 }
+
+/// Idle poll interval for the Whisper loop while it waits for more work.
+const IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(80);
 
 fn whisper_threads() -> usize {
     std::thread::available_parallelism()
@@ -346,10 +405,18 @@ async fn llm_stage(
     let id = job.work.item.id.clone();
     let display_name = job.work.item.display_name.clone();
 
-    if cancel_requested() {
+    // Counts as settled like `emit_error` does, so the overall bar still reaches
+    // its total after a cancel instead of freezing part-way.
+    let emit_cancel = |app: &AppHandle| {
+        let c = done_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let mut p = payload(&id, &display_name, "skipped");
+        p.overall = Some(progress(c, BATCH_TOTAL.load(Ordering::SeqCst)));
         p.message = Some("Cancelled.".to_string());
-        emit_job(&app, p);
+        emit_job(app, p);
+    };
+
+    if cancel_requested() {
+        emit_cancel(&app);
         return;
     }
 
@@ -368,9 +435,7 @@ async fn llm_stage(
         let name_cb = display_name.clone();
         let result = tokio::select! {
             _ = wait_until_cancelled() => {
-                let mut p = payload(&id, &display_name, "skipped");
-                p.message = Some("Cancelled.".to_string());
-                emit_job(&app, p);
+                emit_cancel(&app);
                 return;
             }
             result = llm::generate_summary(&client, &cfg, &context, &transcript, move |part, total| {
@@ -419,9 +484,7 @@ async fn llm_stage(
     }
 
     if cancel_requested() {
-        let mut p = payload(&id, &display_name, "skipped");
-        p.message = Some("Cancelled.".to_string());
-        emit_job(&app, p);
+        emit_cancel(&app);
         return;
     }
 
@@ -482,6 +545,7 @@ async fn llm_stage(
     let mut p = payload(&id, &display_name, "done");
     p.overall = Some(progress(c, BATCH_TOTAL.load(Ordering::SeqCst)));
     p.message = Some(format!("Saved: {}{}", md_path.display(), deletion_note));
+    p.output_path = Some(md_path.display().to_string());
     emit_job(&app, p);
 }
 
@@ -572,7 +636,32 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
         let mut p = payload("", "", "queued");
         p.message = Some("Preparing speaker models…".to_string());
         emit_job(app, p);
-        if let Err(e) = diarize::ensure_models(|_, _| {}).await {
+        // ~32 MB across two files; without progress the app looks frozen on the
+        // first diarized run. Throttled to whole percent like the Whisper model.
+        let app_dl = app.clone();
+        let last_pct = AtomicI32::new(-1);
+        let res = diarize::ensure_models(move |dl, total| {
+            let pct = (dl * 100).checked_div(total).unwrap_or(0) as i32;
+            if last_pct.swap(pct, Ordering::Relaxed) == pct {
+                return;
+            }
+            let _ = app_dl.emit(
+                "model_download_progress",
+                serde_json::json!({
+                    "stage": "downloading",
+                    "model": "speaker models",
+                    "downloaded": dl,
+                    "total": total,
+                    "pct": pct,
+                }),
+            );
+        })
+        .await;
+        let _ = app.emit(
+            "model_download_progress",
+            serde_json::json!({ "stage": "ready" }),
+        );
+        if let Err(e) = res {
             return (0, Err(e));
         }
     }
@@ -658,15 +747,10 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
                 }
                 // Stay alive while the LLM still has a job, so files added via
                 // `append_to_batch` are not dropped after Whisper raced ahead.
-                if JOBS_IN_FLIGHT.load(Ordering::SeqCst) > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(80));
-                    continue;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(80));
-                if pending_lock().is_empty()
-                    && JOBS_IN_FLIGHT.load(Ordering::SeqCst) == 0
-                    && !cancel_requested()
-                {
+                // The recheck after the sleep runs under the queue lock, so an
+                // append that was acknowledged can never be dropped here.
+                std::thread::sleep(IDLE_POLL);
+                if !cancel_requested() && try_finish_pending() {
                     break;
                 }
                 continue;
@@ -684,6 +768,7 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
             if wi.md_path.exists() {
                 let mut p = payload(&wi.item.id, &wi.item.display_name, "skipped");
                 p.message = Some(format!("Skipped (exists): {}", wi.md_path.display()));
+                p.output_path = Some(wi.md_path.display().to_string());
                 emit_job(&app_w, p);
                 continue;
             }
@@ -731,7 +816,7 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
                             // A cancel mid-download surfaces here; report the whole
                             // remaining tail as cancelled rather than as one error.
                             if cancel_requested() {
-                                emit_skipped_remaining(&app_w, &done_w);
+                                emit_cancelled(&app_w, &id, &display_name, &done_w);
                                 break;
                             }
                             emit_error(&app_w, &id, &display_name, e, &done_w);
@@ -744,7 +829,7 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
             };
 
             if cancel_requested() {
-                emit_skipped_remaining(&app_w, &done_w);
+                emit_cancelled(&app_w, &id, &display_name, &done_w);
                 break;
             }
 
@@ -1098,7 +1183,7 @@ mod tests {
         let _lock = GUARD_LOCK.lock().unwrap();
         PROCESSING.store(false, Ordering::SeqCst);
         CANCEL_REQUESTED.store(false, Ordering::SeqCst);
-        pending_lock().clear();
+        pending_lock().queue.clear();
 
         let item = QueueItem {
             id: "/tmp/a.mp3".into(),
@@ -1111,6 +1196,37 @@ mod tests {
         begin_batch().unwrap();
         let _g = ProcessingGuard;
         assert_eq!(append_to_batch(vec![item]).unwrap(), 1);
-        assert_eq!(pending_lock().len(), 1);
+        assert_eq!(pending_lock().queue.len(), 1);
+    }
+
+    #[test]
+    fn finishing_the_queue_rejects_further_appends() {
+        let _lock = GUARD_LOCK.lock().unwrap();
+        PROCESSING.store(false, Ordering::SeqCst);
+        CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+        JOBS_IN_FLIGHT.store(0, Ordering::SeqCst);
+
+        let item = QueueItem {
+            id: "/tmp/a.mp3".into(),
+            kind: "local".into(),
+            source: "/tmp/a.mp3".into(),
+            display_name: "a.mp3".into(),
+            episode: None,
+        };
+
+        begin_batch().unwrap();
+        let _g = ProcessingGuard;
+        // A job still in flight keeps the queue open for late arrivals.
+        JOBS_IN_FLIGHT.store(1, Ordering::SeqCst);
+        assert!(!try_finish_pending());
+        assert_eq!(append_to_batch(vec![item.clone()]).unwrap(), 1);
+
+        // Drained and idle: the loop may exit, and anything appended afterwards
+        // is refused instead of being silently discarded by ProcessingGuard.
+        assert_eq!(drain_pending().len(), 1);
+        JOBS_IN_FLIGHT.store(0, Ordering::SeqCst);
+        assert!(try_finish_pending());
+        let err = append_to_batch(vec![item]).unwrap_err();
+        assert!(err.contains("finishing"), "{err}");
     }
 }

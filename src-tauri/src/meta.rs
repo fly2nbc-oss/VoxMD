@@ -2,7 +2,7 @@ use lofty::file::TaggedFileExt;
 use lofty::prelude::*;
 use std::path::{Path, PathBuf};
 pub const AUDIO_EXTENSIONS: &[&str] = &[
-    "mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus", "mka", "mkv", "aiff", "caf",
+    "mp3", "m4a", "mp4", "wav", "ogg", "flac", "webm", "opus", "mka", "mkv", "aiff", "aif", "caf",
 ];
 
 /// Characters that are invalid in a Windows filename. Both separators are here,

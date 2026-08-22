@@ -60,7 +60,16 @@ pyannote-rs = "0.3"
 # pyannote-rs 0.3.4 declares `ort = "2.0.0-rc.10"`, which also matches later
 # rcs. rc.13 pulled a second `ndarray` and SessionBuilder is not Send/Sync, so
 # the crate does not compile. Pin the version it was written against.
-ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray"] }
+# `download-binaries` and `copy-dylibs` are what actually supply onnxruntime.
+# They used to arrive only through pyannote-rs's default features, so this
+# declaration alone would not have linked; name them here so the build does not
+# depend on a transitive default.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = [
+    "ndarray",
+    "std",
+    "download-binaries",
+    "copy-dylibs",
+] }
 # Same ndarray as pyannote-rs/ort — used by our local segmentation (upstream 0.3.4
 # feeds raw i16 to the ONNX model, so every frame looks like non-speech).
 ndarray = "0.16"

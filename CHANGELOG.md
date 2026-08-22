@@ -16,7 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - **Append while running**: Files, drag-and-drop and Podcast add to a live batch (`append_to_batch`). Overall progress re-reads the growing total.
 - **Prevent sleep** during a batch (`keepawake`). Default on; a failure is logged, not fatal.
 - **Keyboard shortcuts**: F5, Esc, Ctrl+O, Ctrl+,, Ctrl+1/2. Ignored while typing; open dialogs keep Escape.
-- Container formats **MKA, MKV, AIFF, CAF** (Symphonia). `.mov` / `.avi` / `.wmv` / `.mpeg` stay out.
+- Container formats **MKA, MKV, AIFF/AIF, CAF** (Symphonia). `.mov` / `.avi` / `.wmv` / `.mpeg` stay out.
 
 ### Changed
 
@@ -25,10 +25,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - `ort` is pinned to `=2.0.0-rc.10` so `pyannote-rs` 0.3.4 compiles (later rcs pull a second `ndarray` and break Send/Sync).
 - Summaries cover the full transcript: one LLM call up to ~120k characters, then map-reduce in at most 16 parts. The 50k truncation note is gone.
 - Speaker diarization no longer uses pyannote-rs `EmbeddingManager` (which froze each cluster on its first embedding and invented extra speakers).
+- Diarization holds sample index ranges instead of copying every speech segment, and pads only the trailing window — roughly 460 MB less peak memory on a two-hour episode.
+- Cluster distances use the Lance-Williams recurrence (exact for average linkage) instead of re-summing every raw pair per merge.
+- The microphone level meter is emitted from the polling loop instead of the realtime audio callback.
+- Commands that touch the filesystem, enumerate devices or join a thread run off the main thread.
+- Speaker-model download reports progress like the Whisper model download.
+- `job_progress` carries `outputPath`, so the UI no longer recovers the written file by parsing the status text.
 
 ### Fixed
 
 - Two-person interviews were labelled with many speakers because short/noisy first embeddings never updated.
+- **Speaker timestamps drifted on long recordings.** The segmentation frame counter ran across the 10 s window boundaries, losing 970 samples (~61 ms) per window — about 22 s over an hour — which shifted every later speaker turn and fed the embedder the wrong audio.
+- **Stopping dictation dropped the tail.** The final buffer (up to 25 s) was only transcribed when `STOP` was unset, which a normal stop always sets.
+- Leaving dictation mode with Ctrl+1 left the app believing dictation was still running, blocking the batch Start button until restart.
+- A file added at the exact moment a batch drained could be acknowledged by `append_to_batch` and then discarded unprocessed.
+- Adding files to a running batch could enqueue them twice.
+- Cancelling during an episode download or between download and Whisper left the row stuck on its last stage.
+- Episodes skipped because their Markdown already exists are no longer restored as "waiting" on every start.
+- Summaries of very long transcripts no longer fail outright when a map-reduce part still exceeds the model's context; the part size halves and retries.
+- Reasoning models that reject `max_tokens` / `temperature` (reachable via OpenRouter) now get a retry with provider defaults.
+- Improve/Translate no longer truncate long dictations at the summary's fixed 8192-token budget.
+- Live dictation resampled each 1.2 s chunk with a fresh resampler, putting a filter transient at every chunk boundary.
+- The `.deb` now declares `libasound2` and `libdbus-1-3`, which `cpal` and `keepawake` link against.
+- Starting a batch and starting dictation could both claim a `WhisperContext` in a narrow window.
 
 ## [1.0.8] - 2026-08-03
 

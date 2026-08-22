@@ -7,6 +7,10 @@ export const QUEUE_KEY = "queueItems";
 
 export const PODCAST_RECENTS_MAX = 10;
 
+/** Mirrors `MAX_SPEAKERS_CAP` in `src-tauri/src/config.rs`; a Rust test asserts
+ *  the two stay identical, since the backend clamps to its own copy. */
+export const MAX_SPEAKERS = 8;
+
 const LLM_PROVIDERS: LlmProvider[] = ["deepseek", "openrouter", "custom"];
 
 function asLlmProvider(raw: unknown, apiBaseUrl: string): LlmProvider {
@@ -23,9 +27,9 @@ function asBool(raw: unknown, fallback: boolean): boolean {
   return typeof raw === "boolean" ? raw : fallback;
 }
 
-function asMaxSpeakers(raw: unknown): number {
+export function asMaxSpeakers(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(8, Math.round(raw)));
+  return Math.max(0, Math.min(MAX_SPEAKERS, Math.round(raw)));
 }
 
 /** Explicit field picking also drops keys from older versions (temperature, maxTokens, …). */

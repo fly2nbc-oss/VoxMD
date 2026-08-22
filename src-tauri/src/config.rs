@@ -279,6 +279,27 @@ mod tests {
         assert!(cfg.microphone_name.is_empty());
     }
 
+    /// The settings drawer clamps the same value before it ever reaches Rust.
+    /// If the two caps drift, the UI offers a speaker count the backend silently
+    /// reduces.
+    #[test]
+    fn speaker_cap_matches_the_frontend() {
+        let ts = std::fs::read_to_string("../src/lib/configStore.ts").expect("read configStore.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const MAX_SPEAKERS ="))
+            .expect("MAX_SPEAKERS declaration in configStore.ts");
+        let value: u8 = line
+            .split('=')
+            .nth(1)
+            .and_then(|v| v.trim().trim_end_matches(';').parse().ok())
+            .expect("numeric MAX_SPEAKERS");
+        assert_eq!(
+            value, MAX_SPEAKERS_CAP,
+            "MAX_SPEAKERS_CAP in config.rs and MAX_SPEAKERS in src/lib/configStore.ts have drifted"
+        );
+    }
+
     #[test]
     fn summary_without_key_and_no_transcript_is_rejected() {
         let cfg = AppConfig {

@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { Check, Copy, Eraser, Loader2, Mic, MicOff, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Check, Copy, Eraser, Languages, Loader2, Mic, MicOff, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { DictationEvents } from "../hooks/useDictationEvents";
 import { toMsg } from "../lib/jobs";
-import type { AppConfig, DictationStatusPayload, MicrophoneInfo } from "../types";
+import type { AppConfig, MicrophoneInfo } from "../types";
 
 const TRANSLATE_TARGETS = [
   "German",
@@ -22,8 +22,8 @@ interface Props {
   config: AppConfig;
   storeReady: boolean;
   processing: boolean;
-  running: boolean;
-  onRunningChange: (running: boolean) => void;
+  /** Live dictation state, owned by the app so it survives a mode switch. */
+  dictation: DictationEvents;
   onStart: () => void;
   onStop: () => void;
   onMicrophoneChange: (name: string) => void;
@@ -34,19 +34,17 @@ export function DictationView({
   config,
   storeReady,
   processing,
-  running,
-  onRunningChange,
+  dictation,
   onStart,
   onStop,
   onMicrophoneChange,
   onStatus,
 }: Props) {
+  const { stage, running, level, partial, lastFinal, clearPartial } = dictation;
   const [committed, setCommitted] = useState("");
-  const [partial, setPartial] = useState("");
   const [proposal, setProposal] = useState<string | null>(null);
-  const [level, setLevel] = useState(0);
-  const [stage, setStage] = useState("idle");
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
+  const lastAppliedSeq = useRef(0);
   const [aiBusy, setAiBusy] = useState<"improve" | "translate" | null>(null);
   const [translateTarget, setTranslateTarget] = useState("English");
   const [copied, setCopied] = useState(false);
@@ -86,57 +84,13 @@ export function DictationView({
     };
   }, [captureOwnsMic, processing, config.microphoneName, onStatus]);
 
+  // `seq` guards against re-appending the same commit when the view remounts
+  // after a mode switch, since the hook keeps the last value around.
   useEffect(() => {
-    const unlisteners: Array<() => void> = [];
-    let cancelled = false;
-    const track = (stop: () => void) => {
-      if (cancelled) stop();
-      else unlisteners.push(stop);
-    };
-
-    (async () => {
-      track(
-        await listen<DictationStatusPayload>("dictation_status", (e) => {
-          const { stage: next, message } = e.payload;
-          setStage(next);
-          if (message) onStatus(message);
-          if (next === "stopped" || next === "error") {
-            onRunningChange(false);
-            setPartial("");
-          }
-          if (next === "listening" || next === "loading" || next === "finalizing") {
-            onRunningChange(true);
-          }
-        }),
-      );
-      track(
-        await listen<{ text: string }>("dictation_partial", (e) => {
-          setPartial(e.payload.text ?? "");
-        }),
-      );
-      track(
-        await listen<{ text: string }>("dictation_final", (e) => {
-          const text = (e.payload.text ?? "").trim();
-          if (!text) {
-            setPartial("");
-            return;
-          }
-          setCommitted((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text));
-          setPartial("");
-        }),
-      );
-      track(
-        await listen<{ rms: number }>("dictation_level", (e) => {
-          setLevel(e.payload.rms ?? 0);
-        }),
-      );
-    })();
-
-    return () => {
-      cancelled = true;
-      for (const stop of unlisteners) stop();
-    };
-  }, [onRunningChange, onStatus]);
+    if (!lastFinal || lastFinal.seq === lastAppliedSeq.current) return;
+    lastAppliedSeq.current = lastFinal.seq;
+    setCommitted((prev) => (prev.trim() ? `${prev.trimEnd()} ${lastFinal.text}` : lastFinal.text));
+  }, [lastFinal]);
 
   const meterPct = Math.min(100, Math.round(Math.sqrt(Math.max(0, level)) * 280));
 
@@ -271,7 +225,7 @@ export function DictationView({
               className="btn-primary btn-sm"
               onClick={() => {
                 setCommitted(proposal);
-                setPartial("");
+                clearPartial();
                 setProposal(null);
               }}
             >
@@ -302,7 +256,7 @@ export function DictationView({
           disabled={!committed && !partial}
           onClick={() => {
             setCommitted("");
-            setPartial("");
+            clearPartial();
             setProposal(null);
           }}
         >
@@ -349,7 +303,9 @@ export function DictationView({
             >
               {aiBusy === "translate" ? (
                 <Loader2 size={14} className="icon spin" aria-hidden />
-              ) : null}
+              ) : (
+                <Languages size={14} aria-hidden />
+              )}
               <span>Translate</span>
             </button>
           </>

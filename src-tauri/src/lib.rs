@@ -32,7 +32,7 @@ fn processing_state() -> bool {
     pipeline::is_processing()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn vulkan_status() -> VulkanStatus {
     let built_with_vulkan = vulkan_runtime::built_with_vulkan();
     let loader_available = vulkan_runtime::loader_available();
@@ -44,19 +44,23 @@ fn vulkan_status() -> VulkanStatus {
 }
 
 /// Returns available Whisper model names with cache status.
-#[tauri::command]
+///
+/// The `async` marker on this and the commands below only moves them off the
+/// main thread — they touch the filesystem, `dlopen` the Vulkan loader or join a
+/// capture thread, any of which freezes the window when run inline.
+#[tauri::command(async)]
 fn list_whisper_models() -> Vec<ModelInfo> {
     model_download::list_models()
 }
 
 /// Returns the local cache directory for Whisper models.
-#[tauri::command]
+#[tauri::command(async)]
 fn whisper_cache_dir() -> String {
     model_download::cache_dir().to_string_lossy().into_owned()
 }
 
 /// Deletes all cached Whisper model files.
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_whisper_cache() -> Result<(), String> {
     model_download::clear_model_cache()
 }
@@ -98,17 +102,17 @@ async fn translate_text(config: AppConfig, text: String, target: String) -> Resu
     llm::translate_text(&config, &text, &target).await
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_microphones() -> Result<Vec<MicrophoneInfo>, String> {
     dictation::list_microphones()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn start_mic_monitor(app: tauri::AppHandle, microphone_name: String) -> Result<(), String> {
     dictation::start_monitor(app, microphone_name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_mic_monitor() {
     dictation::stop_monitor();
 }
@@ -140,13 +144,18 @@ async fn start_transcription(
     config: AppConfig,
 ) -> Result<(), String> {
     config.validate_for_run()?;
-    if dictation::is_running() {
-        return Err("Stop dictation before starting a batch.".to_string());
-    }
     // Claim the slot before returning, so the frontend cannot enable its Cancel
     // button while the flag is still unset. `run_batch` releases it via its guard
     // and reports the outcome through the `batch_complete` event.
+    //
+    // Claiming *before* the dictation check closes the window in which both
+    // could start: `dictation::start` tests `is_processing()` after its own
+    // compare-exchange, so whichever claims first wins and the loser backs out.
     pipeline::begin_batch()?;
+    if dictation::is_running() {
+        pipeline::release_batch();
+        return Err("Stop dictation before starting a batch.".to_string());
+    }
     pipeline::enqueue_items(items);
     tokio::spawn(async move {
         pipeline::run_batch(app, config).await;

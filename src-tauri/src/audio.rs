@@ -78,7 +78,7 @@ impl Biquad {
 /// (a three-hour 48 kHz episode used to need well over 2 GB). And it low-passes
 /// before decimating: plain interpolation folded everything above 8 kHz back
 /// into the audible band, which degrades what Whisper receives.
-struct Resampler {
+pub(crate) struct Resampler {
     ratio: f64,
     filter: Vec<Biquad>,
     /// Filtered input not yet consumed, plus the fractional read position in it.
@@ -88,7 +88,7 @@ struct Resampler {
 }
 
 impl Resampler {
-    fn new(from_rate: u32, to_rate: u32) -> Self {
+    pub(crate) fn new(from_rate: u32, to_rate: u32) -> Self {
         let from = f64::from(from_rate);
         let to = f64::from(to_rate);
         // Only downsampling aliases; upsampling needs no guard filter.
@@ -110,7 +110,7 @@ impl Resampler {
         }
     }
 
-    fn push(&mut self, chunk: &[f32]) {
+    pub(crate) fn push(&mut self, chunk: &[f32]) {
         self.pending.reserve(chunk.len());
         for &s in chunk {
             let mut v = f64::from(s);
@@ -140,6 +140,14 @@ impl Resampler {
             self.pending.drain(..consumed);
             self.pos -= consumed as f64;
         }
+    }
+
+    /// Hands over everything resampled so far and keeps the filter state, so a
+    /// live capture can feed chunk after chunk through one instance. Building a
+    /// fresh `Resampler` per chunk resets the biquads and the fractional read
+    /// position, which puts a settling transient at every chunk boundary.
+    pub(crate) fn take(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.out)
     }
 
     fn finish(mut self) -> Vec<f32> {
@@ -180,17 +188,13 @@ pub(crate) fn downmix_into(
     Ok(())
 }
 
-/// Resamples a mono buffer to 16 kHz for Whisper / the diarizer.
-pub fn resample_mono_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
-    if from_rate == 0 || samples.is_empty() {
-        return Vec::new();
+/// Streaming resampler to 16 kHz for live capture. `None` when the input is
+/// already at 16 kHz, so the caller can pass samples straight through.
+pub(crate) fn resampler_to_16k(from_rate: u32) -> Option<Resampler> {
+    if from_rate == 0 || from_rate == TARGET_RATE {
+        return None;
     }
-    if from_rate == TARGET_RATE {
-        return samples.to_vec();
-    }
-    let mut r = Resampler::new(from_rate, TARGET_RATE);
-    r.push(samples);
-    r.finish()
+    Some(Resampler::new(from_rate, TARGET_RATE))
 }
 
 /// Reads audio with Symphonia and returns mono f32 @ 16 kHz for whisper.cpp.

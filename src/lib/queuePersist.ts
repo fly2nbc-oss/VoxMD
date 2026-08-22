@@ -11,12 +11,21 @@ function isEpisode(value: unknown): boolean {
   );
 }
 
-/** Keep unfinished (and failed) rows; drop completed exports. */
-export function itemsToPersist(
-  items: QueueItem[],
-  jobs: Record<string, JobRow>,
-): QueueItem[] {
-  return items.filter((item) => jobs[item.id]?.stage !== "done");
+/**
+ * Keep unfinished (and failed) rows; drop completed exports.
+ *
+ * A `skipped` row means two different things: the Markdown already existed
+ * (finished — nothing left to do), or the batch was cancelled before the item
+ * ran (unfinished — restore it). `outputPath` is only set in the first case, so
+ * an already-exported episode no longer comes back as "waiting" on every start.
+ */
+export function itemsToPersist(items: QueueItem[], jobs: Record<string, JobRow>): QueueItem[] {
+  return items.filter((item) => {
+    const job = jobs[item.id];
+    if (!job) return true;
+    if (job.stage === "done") return false;
+    return !(job.stage === "skipped" && !!job.outputPath);
+  });
 }
 
 export function isQueueItem(value: unknown): value is QueueItem {

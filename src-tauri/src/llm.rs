@@ -13,6 +13,11 @@ use crate::config::{resolve_summary_language, AppConfig};
 const SUMMARY_TEMPERATURE: f32 = 0.3;
 /// The summary is capped at ~600 words; this leaves generous headroom.
 const SUMMARY_MAX_TOKENS: u32 = 8192;
+/// Improve/translate return the whole text, so the budget has to scale with the
+/// input instead of using the summary's fixed cap. ~4 chars per token, doubled
+/// because a translation can be considerably longer than its source.
+const REWRITE_MIN_TOKENS: u32 = 2048;
+const REWRITE_MAX_TOKENS: u32 = 32_768;
 /// One LLM call is enough below this byte length (~1.7 h of speech, ~43k tokens).
 const SUMMARY_SINGLE_CALL_MAX_CHARS: usize = 120_000;
 /// Floor for a map-reduce part; actual part size is `max(this, total / MAX_PARTS)`.
@@ -80,11 +85,47 @@ pub fn make_client(cfg: &AppConfig) -> Client<OpenAIConfig> {
     }
 }
 
+/// Reasoning models (o-series, and several behind OpenRouter) reject
+/// `max_tokens` and a non-default `temperature`; they want
+/// `max_completion_tokens` and nothing else. The wording differs per provider,
+/// so match on the parameter names rather than on a model allow-list.
+fn rejects_sampling_params(err: &str) -> bool {
+    let l = err.to_ascii_lowercase();
+    let names = ["max_tokens", "max_completion_tokens", "temperature"];
+    let complaints = [
+        "unsupported",
+        "not supported",
+        "unrecognized",
+        "is not permitted",
+        "does not support",
+        "invalid",
+        "use 'max_completion_tokens'",
+        "use `max_completion_tokens`",
+    ];
+    names.iter().any(|n| l.contains(n)) && complaints.iter().any(|c| l.contains(c))
+}
+
 async fn call_llm(
     client: &Client<OpenAIConfig>,
     model: &str,
     temperature: f32,
     max_tokens: u32,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    match call_once(client, model, Some((temperature, max_tokens)), system, user).await {
+        Err(e) if rejects_sampling_params(&e) => {
+            // Second and last attempt: provider defaults for both.
+            call_once(client, model, None, system, user).await
+        }
+        other => other,
+    }
+}
+
+async fn call_once(
+    client: &Client<OpenAIConfig>,
+    model: &str,
+    sampling: Option<(f32, u32)>,
     system: &str,
     user: &str,
 ) -> Result<String, String> {
@@ -98,16 +139,15 @@ async fn call_llm(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let req = CreateChatCompletionRequestArgs::default()
-        .model(model)
-        .messages(vec![
-            ChatCompletionRequestMessage::System(sys),
-            ChatCompletionRequestMessage::User(usr),
-        ])
-        .temperature(temperature)
-        .max_tokens(max_tokens)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut builder = CreateChatCompletionRequestArgs::default();
+    builder.model(model).messages(vec![
+        ChatCompletionRequestMessage::System(sys),
+        ChatCompletionRequestMessage::User(usr),
+    ]);
+    if let Some((temperature, max_tokens)) = sampling {
+        builder.temperature(temperature).max_tokens(max_tokens);
+    }
+    let req = builder.build().map_err(|e| e.to_string())?;
 
     let resp = client.chat().create(req).await.map_err(|e| e.to_string())?;
 
@@ -152,20 +192,27 @@ fn looks_like_context_overflow(err: &str) -> bool {
     NEEDLES.iter().any(|n| l.contains(n))
 }
 
-fn split_transcript_parts(transcript: &str) -> Vec<String> {
+/// `max_part_chars` bounds one map call. `SUMMARY_MAX_PARTS` is a soft cap: a
+/// transcript long enough that 16 parts would still exceed the budget gets more
+/// parts instead, because the alternative is a request the model refuses.
+fn split_transcript_parts_capped(transcript: &str, max_part_chars: usize) -> Vec<String> {
     let lines: Vec<&str> = transcript.split('\n').collect();
     if lines.is_empty() {
         return vec![transcript.to_string()];
     }
     let total = transcript.len().max(1);
-    let part_target = SUMMARY_MIN_PART_CHARS.max(total.div_ceil(SUMMARY_MAX_PARTS));
+    let budget = max_part_chars.max(1);
+    let part_target = SUMMARY_MIN_PART_CHARS
+        .max(total.div_ceil(SUMMARY_MAX_PARTS))
+        .min(budget);
+    let max_parts = SUMMARY_MAX_PARTS.max(total.div_ceil(part_target));
     let mut parts: Vec<Vec<&str>> = Vec::new();
     let mut cur: Vec<&str> = Vec::new();
     let mut cur_len = 0usize;
 
     for line in &lines {
         let add = line.len() + usize::from(!cur.is_empty());
-        if !cur.is_empty() && cur_len + add > part_target && parts.len() < SUMMARY_MAX_PARTS - 1 {
+        if !cur.is_empty() && cur_len + add > part_target && parts.len() < max_parts - 1 {
             parts.push(std::mem::take(&mut cur));
             cur_len = 0;
         }
@@ -258,7 +305,32 @@ async fn summarize_chunked<F>(
 where
     F: Fn(usize, usize),
 {
-    let parts = split_transcript_parts(transcript);
+    // Halve the part size and retry when the model reports a context overflow.
+    // Without this a transcript whose 1/16 slice is still too large failed the
+    // whole file, since only the single-call path had a fallback.
+    let mut budget = SUMMARY_SINGLE_CALL_MAX_CHARS;
+    loop {
+        match summarize_chunked_at(client, cfg, context, transcript, &on_part, budget).await {
+            Err(e) if looks_like_context_overflow(&e) && budget > SUMMARY_MIN_PART_CHARS => {
+                budget = (budget / 2).max(SUMMARY_MIN_PART_CHARS);
+            }
+            other => return other,
+        }
+    }
+}
+
+async fn summarize_chunked_at<F>(
+    client: &Client<OpenAIConfig>,
+    cfg: &AppConfig,
+    context: &str,
+    transcript: &str,
+    on_part: &F,
+    max_part_chars: usize,
+) -> Result<String, String>
+where
+    F: Fn(usize, usize),
+{
+    let parts = split_transcript_parts_capped(transcript, max_part_chars);
     let total = parts.len();
     let lang = resolve_summary_language(&cfg.summary_language);
     let map_system = map_notes_prompt(&lang);
@@ -297,6 +369,12 @@ where
         &user,
     )
     .await
+}
+
+/// Output budget for improve/translate: proportional to the input, clamped.
+fn rewrite_max_tokens(chars: usize) -> u32 {
+    let estimate = (chars / 2).clamp(1, REWRITE_MAX_TOKENS as usize) as u32;
+    estimate.clamp(REWRITE_MIN_TOKENS, REWRITE_MAX_TOKENS)
 }
 
 /// `context` is a short orientation block (title, podcast/episode info); may be empty.
@@ -471,7 +549,7 @@ pub async fn improve_text(cfg: &AppConfig, text: &str) -> Result<String, String>
         &client,
         &cfg.api_model,
         SUMMARY_TEMPERATURE,
-        SUMMARY_MAX_TOKENS,
+        rewrite_max_tokens(trimmed.len()),
         improve_system_prompt(),
         trimmed,
     )
@@ -496,7 +574,7 @@ pub async fn translate_text(cfg: &AppConfig, text: &str, target: &str) -> Result
         &client,
         &cfg.api_model,
         SUMMARY_TEMPERATURE,
-        SUMMARY_MAX_TOKENS,
+        rewrite_max_tokens(trimmed.len()),
         &system,
         trimmed,
     )
@@ -590,7 +668,7 @@ fn parse_model_ids(body: &str) -> Vec<LlmModelInfo> {
     let Some(arr) = arr else {
         return Vec::new();
     };
-    let skip = regex_skip_model();
+    let skip = is_non_chat_model;
     let mut ids: Vec<String> = arr
         .iter()
         .filter_map(|m| m.get("id").and_then(|id| id.as_str()))
@@ -602,26 +680,32 @@ fn parse_model_ids(body: &str) -> Vec<LlmModelInfo> {
     ids.into_iter().map(|id| LlmModelInfo { id }).collect()
 }
 
-fn regex_skip_model() -> impl Fn(&str) -> bool {
-    |id: &str| {
-        let l = id.to_ascii_lowercase();
-        l.contains("embed")
-            || l.contains("whisper")
-            || l.contains("tts")
-            || l.contains("moderation")
-            || l.contains("rerank")
-            || l.contains("image")
-            || l.contains("video")
-    }
+/// Model ids that cannot serve a chat completion, filtered out of the picker.
+fn is_non_chat_model(id: &str) -> bool {
+    let l = id.to_ascii_lowercase();
+    l.contains("embed")
+        || l.contains("whisper")
+        || l.contains("tts")
+        || l.contains("moderation")
+        || l.contains("rerank")
+        || l.contains("image")
+        || l.contains("video")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         fmt_ts, format_transcript, interval_overlap, looks_like_context_overflow, parse_model_ids,
-        smooth_speaker_outliers, speakers_for_lines, split_transcript_parts, summary_system_prompt,
-        TranscriptLine, SUMMARY_MAX_PARTS, SUMMARY_MIN_PART_CHARS, SUMMARY_SINGLE_CALL_MAX_CHARS,
+        rejects_sampling_params, rewrite_max_tokens, smooth_speaker_outliers, speakers_for_lines,
+        split_transcript_parts_capped, summary_system_prompt, TranscriptLine, REWRITE_MAX_TOKENS,
+        REWRITE_MIN_TOKENS, SUMMARY_MAX_PARTS, SUMMARY_MIN_PART_CHARS,
+        SUMMARY_SINGLE_CALL_MAX_CHARS,
     };
+
+    /// The budget `summarize_chunked` starts from before any overflow retry.
+    fn split_transcript_parts(transcript: &str) -> Vec<String> {
+        split_transcript_parts_capped(transcript, SUMMARY_SINGLE_CALL_MAX_CHARS)
+    }
 
     fn line(start: f32, end: f32, text: &str) -> TranscriptLine {
         TranscriptLine {
@@ -678,6 +762,49 @@ mod tests {
             .join("\n");
         let parts = split_transcript_parts(&text);
         assert_eq!(parts.len(), SUMMARY_MAX_PARTS);
+    }
+
+    #[test]
+    fn split_honours_a_smaller_part_budget() {
+        let line = format!("[00:00:00] {}", "x".repeat(50_000));
+        let text = std::iter::repeat_n(line.as_str(), 40)
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The default cut leaves 16 parts of ~125k chars — still too big for a
+        // model that just refused 120k. A tighter budget must produce more,
+        // smaller parts rather than silently keeping the oversized ones.
+        let tight = split_transcript_parts_capped(&text, SUMMARY_MIN_PART_CHARS);
+        let default = split_transcript_parts(&text);
+        assert!(tight.len() > SUMMARY_MAX_PARTS, "{}", tight.len());
+        assert!(default.len() < tight.len());
+        for part in &tight {
+            // One line already exceeds the budget, so allow a single-line
+            // overshoot plus the 3 overlap lines carried from the part before.
+            assert!(part.lines().count() <= 4, "{}", part.lines().count());
+        }
+    }
+
+    #[test]
+    fn rewrite_budget_scales_with_input() {
+        assert_eq!(rewrite_max_tokens(0), REWRITE_MIN_TOKENS);
+        assert_eq!(rewrite_max_tokens(100), REWRITE_MIN_TOKENS);
+        assert_eq!(rewrite_max_tokens(20_000), 10_000);
+        assert_eq!(rewrite_max_tokens(10_000_000), REWRITE_MAX_TOKENS);
+    }
+
+    #[test]
+    fn sampling_param_rejections_are_recognised() {
+        assert!(rejects_sampling_params(
+            "Unsupported parameter: 'max_tokens' is not supported with this model. \
+             Use 'max_completion_tokens' instead."
+        ));
+        assert!(rejects_sampling_params(
+            "invalid_request_error: temperature does not support 0.3 with this model"
+        ));
+        assert!(!rejects_sampling_params("rate limit exceeded"));
+        assert!(!rejects_sampling_params(
+            "maximum context length is 8192 tokens"
+        ));
     }
 
     #[test]

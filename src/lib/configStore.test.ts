@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  asMaxSpeakers,
+  MAX_SPEAKERS,
   mergeConfig,
   normalizePodcastRecents,
   PODCAST_RECENTS_MAX,
@@ -27,8 +29,8 @@ describe("mergeConfig", () => {
     expect(merged.dictationModel).toBe("small");
   });
 
-  it("clamps maxSpeakers to 0..=8", () => {
-    expect(mergeConfig({ maxSpeakers: 20 } as never).maxSpeakers).toBe(8);
+  it("clamps maxSpeakers to the shared cap", () => {
+    expect(mergeConfig({ maxSpeakers: 20 } as never).maxSpeakers).toBe(MAX_SPEAKERS);
     expect(mergeConfig({ maxSpeakers: -3 } as never).maxSpeakers).toBe(0);
     expect(mergeConfig({ maxSpeakers: 2 } as never).maxSpeakers).toBe(2);
   });
@@ -43,6 +45,16 @@ describe("mergeConfig", () => {
   it("returns defaults for null/undefined", () => {
     expect(mergeConfig(null)).toEqual(defaultConfig());
     expect(mergeConfig(undefined)).toEqual(defaultConfig());
+  });
+});
+
+describe("asMaxSpeakers", () => {
+  it("rounds, clamps and rejects non-numbers", () => {
+    expect(asMaxSpeakers(3.4)).toBe(3);
+    expect(asMaxSpeakers(99)).toBe(MAX_SPEAKERS);
+    expect(asMaxSpeakers(-1)).toBe(0);
+    expect(asMaxSpeakers(Number.NaN)).toBe(0);
+    expect(asMaxSpeakers("2")).toBe(0);
   });
 });
 

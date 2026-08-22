@@ -40,7 +40,9 @@ CI (`.github/workflows/ci.yml`) runs a Linux lint/test gate (eslint, Vitest, tsc
 
 Channel capacity 1 is the invariant: **at most one Whisper job and one LLM job in flight at once**. While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more. Don't widen the channel without understanding this contract (single `WhisperContext`, memory, and ordering all depend on it). `total` on `overall` progress is reread from `BATCH_TOTAL` because the deque can grow.
 
-Concurrency control uses two global atomics: `PROCESSING` (guards against double-start via `compare_exchange`) and `CANCEL_REQUESTED` (cooperative cancel, checked at task boundaries — there is **no hard mid-inference or mid-download cancellation**). Dictation (`DICTATING`) and a batch are mutually exclusive. Both batch flags are reset on completion. `keepawake` holds an idle-inhibit lock while `prevent_sleep` is set.
+Concurrency control uses two global atomics: `PROCESSING` (guards against double-start via `compare_exchange`) and `CANCEL_REQUESTED` (cooperative cancel, checked at task boundaries — there is **no hard mid-inference or mid-download cancellation**). Dictation (`DICTATING`) and a batch are mutually exclusive: each side claims **its own** flag first and then checks the other's, so the loser backs out (`pipeline::release_batch`) instead of both starting. Both batch flags are reset on completion. `keepawake` holds an idle-inhibit lock while `prevent_sleep` is set.
+
+The pending queue is `Mutex<Pending { queue, closed }>`, not a bare deque. The Whisper loop may only exit through `try_finish_pending`, which sets `closed` under the same lock `append_to_batch` takes — otherwise an append acknowledged in that gap is discarded by `ProcessingGuard` without being processed.
 
 ### Queue items: local files vs. podcast episodes
 
@@ -53,7 +55,13 @@ Frontend also persists `podcastRecents` (up to 10 `{ feedUrl, outputDir, feedTit
 The only channel between sides is Tauri IPC. Two directions:
 
 - **Commands** (`invoke`): registered in `lib.rs::run()` via `generate_handler!`. Key ones: `start_transcription` (takes `items: Vec<QueueItem>`), `append_to_batch`, `cancel_transcription`, `fetch_podcast_feed`, `list_whisper_models`, `clear_whisper_cache`, `vulkan_status`, `system_summary_language`, `list_llm_models`, `verify_api_key`, `improve_text`, `translate_text`, `list_microphones`, `start_dictation`, `stop_dictation`.
-- **Events** (`app.emit` → `listen` in `App.tsx`): `job_progress` (stages `queued/download/whisper/diarize/llm/done/skipped/error`, payload `JobProgressPayload` with optional `downloadPct`), `model_download_progress` (resolving/downloading/ready), `batch_complete`, plus `dictation_status` / `dictation_partial` / `dictation_final` / `dictation_level`.
+- **Events** (`app.emit` → `listen` in `App.tsx`): `job_progress` (stages `queued/download/whisper/diarize/llm/done/skipped/error`, payload `JobProgressPayload` with optional `downloadPct` and `outputPath`), `model_download_progress` (resolving/downloading/ready), `batch_complete`, plus `dictation_status` / `dictation_partial` / `dictation_final` / `dictation_level`.
+
+`outputPath` is set on `done` and on a `Skipped (exists)` row. It is what lets the UI open the result without parsing the status text, and what tells an already-exported skip apart from a cancelled one in `queuePersist.ts`.
+
+Batch events live in `useBatchEvents`, dictation events in `useDictationEvents` — **both at app level**. Dictation listeners must not sit in `DictationView`: leaving dictation mode unmounts it before the backend's `stopped` event arrives, which used to leave `running` stuck true.
+
+Commands that hit the filesystem, enumerate audio devices, `dlopen` the Vulkan loader or join a thread are declared `#[tauri::command(async)]` so they do not block the main thread.
 
 `AppConfig` crosses the boundary as a single struct. The Rust side (`config.rs`) uses `#[serde(rename_all = "camelCase")]`, so the Rust `snake_case` fields map 1:1 to the TS `camelCase` fields in `src/types.ts` / `src/defaults.ts`. **When adding a setting, update all of: `config.rs`, `types.ts`, `defaults.ts`, and the settings UI in `SettingsDrawer.tsx`.** Settings persist client-side via `@tauri-apps/plugin-store` (note the `whisperModelPath` → `whisperModel` serde alias for old stores). The processing queue is stored separately under `queueItems`.
 
@@ -94,6 +102,11 @@ There is **no LLM pass over the batch transcript** — the transcript section in
 ## Gotchas
 
 - Whisper exposes no fine-grained percentage; progress is stage-based (`download` has a percentage, `whisper` / `diarize` / `llm` do not).
+- Diarization's frame grid is **per 10 s window**: `frame_offset(window_start, frame)`. `segmentation-3.0` emits 589 frames of 270 samples for a 160 000-sample window, so a counter carried across windows loses 970 samples each time (~22 s per hour). Upstream pyannote-rs has this bug; `speech_segments` documents it as fixed point 5.
+- `audio::Resampler` is stateful (biquads, fractional read position). Live capture must reuse **one** instance via `resampler_to_16k` — a fresh one per chunk puts a settling transient at every chunk boundary.
+- The dictation tail must still be transcribed after `STOP` is set, so `transcribe_buffer` takes its abort predicate as a parameter rather than reading `STOP` itself.
+- `MAX_SPEAKERS_CAP` (`config.rs`) and `MAX_SPEAKERS` (`src/lib/configStore.ts`) are checked against each other by a Rust test, as are the two `AUDIO_EXTENSIONS` lists.
+- `cpal` links `libasound.so.2` and `keepawake` links `libdbus-1.so.3`; both are declared in `bundle.linux.deb.depends`.
 - `gpu-vulkan` is opt-in; `use_gpu` only applies when the binary was built with that feature **and** the Vulkan loader is present at runtime (`vulkan_runtime::gpu_usable()`). Missing `libvulkan.so` no longer prevents startup (link stub + runtime probe).
 - `delete_source_after_success` defaults to **false**. When enabled it deletes **`local_audio` only** (local files and downloaded podcast audio) — **never** the Markdown. Deletion failure is reported as a note, not a hard error.
 - `whisper_model` accepts a preset name (`turbo`, `large-v3`, …) **or** a local path ending in `.bin` or `.gguf` (path detection in `config.rs::looks_like_whisper_path`). UI: preset dropdown or **Custom path…** + file picker. Dictation uses `dictation_model` the same way.

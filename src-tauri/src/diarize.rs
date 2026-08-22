@@ -46,6 +46,13 @@ fn is_overlap_class(class: usize) -> bool {
     class >= 4
 }
 
+/// Absolute sample position of frame `frame` in the window starting at
+/// `window_start`. The grid is anchored to each window — see bug 5 on
+/// [`speech_segments`].
+fn frame_offset(window_start: usize, frame: usize) -> usize {
+    window_start + FRAME_START + frame * FRAME_SIZE
+}
+
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -82,10 +89,13 @@ fn to_i16(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
+/// One stretch of speech. `range` indexes the *original* (unpadded) sample
+/// buffer; holding indices instead of an owned copy keeps a multi-hour episode
+/// from allocating a second full-length i16 buffer spread over thousands of Vecs.
 struct SpeechSeg {
     start: f32,
     end: f32,
-    samples: Vec<i16>,
+    range: (usize, usize),
     class: u8,
     overlap: bool,
     window: usize,
@@ -94,6 +104,13 @@ struct SpeechSeg {
 impl SpeechSeg {
     fn duration(&self) -> f32 {
         (self.end - self.start).max(0.0)
+    }
+
+    fn samples<'a>(&self, all: &'a [i16]) -> &'a [i16] {
+        let (a, b) = self.range;
+        let a = a.min(all.len());
+        let b = b.clamp(a, all.len());
+        &all[a..b]
     }
 }
 
@@ -178,8 +195,9 @@ fn run_diarize(
         if abort() {
             return Err("Cancelled.".to_string());
         }
-        let embedding = if seg.duration() >= MIN_EMBED_S && !seg.samples.is_empty() {
-            match extractor.compute(&seg.samples) {
+        let seg_samples = seg.samples(&samples);
+        let embedding = if seg.duration() >= MIN_EMBED_S && !seg_samples.is_empty() {
+            match extractor.compute(seg_samples) {
                 Ok(iter) => {
                     let mut v: Vec<f32> = iter.collect();
                     l2_normalize(&mut v);
@@ -346,6 +364,11 @@ fn cosine_dist(a: &[f32], b: &[f32]) -> f32 {
 /// `target_k = Some(k)` cuts the dendrogram at exactly `k` clusters (or `n`
 /// if there are fewer points). `None` merges while the closest pair is under
 /// `max_dist`, then keeps merging until at most `cap` clusters remain.
+///
+/// Cluster distances are updated with the Lance-Williams recurrence for UPGMA,
+/// `d(i∪j, k) = (nᵢ·d(i,k) + nⱼ·d(j,k)) / (nᵢ+nⱼ)`, which is exact for average
+/// linkage. Recomputing each merged distance from the raw pairs instead cost
+/// O(n²) per merge and needed a second n×n matrix.
 fn agglomerative_cluster(
     embeddings: &[Vec<f32>],
     max_dist: f32,
@@ -362,15 +385,14 @@ fn agglomerative_cluster(
 
     let mut live = vec![true; n];
     let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
-    let mut pair = vec![0.0f32; n * n];
+    let mut cdist = vec![0.0f32; n * n];
     for i in 0..n {
         for j in (i + 1)..n {
             let d = cosine_dist(&embeddings[i], &embeddings[j]);
-            pair[i * n + j] = d;
-            pair[j * n + i] = d;
+            cdist[i * n + j] = d;
+            cdist[j * n + i] = d;
         }
     }
-    let mut cdist = pair.clone();
     let mut n_live = n;
     let mut merges = Vec::new();
     let floor = target_k.unwrap_or(1).clamp(1, n);
@@ -406,27 +428,21 @@ fn agglomerative_cluster(
         }
 
         merges.push(best);
+        let (wi, wj) = (members[bi].len() as f32, members[bj].len() as f32);
+        let total = wi + wj;
+        for k in 0..n {
+            if !live[k] || k == bi || k == bj {
+                continue;
+            }
+            let d = (wi * cdist[bi * n + k] + wj * cdist[bj * n + k]) / total;
+            cdist[bi * n + k] = d;
+            cdist[k * n + bi] = d;
+        }
+
         let other = std::mem::take(&mut members[bj]);
         live[bj] = false;
         n_live -= 1;
         members[bi].extend(other);
-
-        for k in 0..n {
-            if !live[k] || k == bi {
-                continue;
-            }
-            let mut sum = 0.0f32;
-            let mut count = 0u32;
-            for &a in &members[bi] {
-                for &b in &members[k] {
-                    sum += pair[a * n + b];
-                    count += 1;
-                }
-            }
-            let d = if count == 0 { 0.0 } else { sum / count as f32 };
-            cdist[bi * n + k] = d;
-            cdist[k * n + bi] = d;
-        }
     }
 
     let mut labels = vec![0usize; n];
@@ -638,6 +654,10 @@ fn renumber_by_first_appearance(turns: &mut [SpeakerTurn]) {
 /// 4. Local speaker indices are only valid inside one window, so a turn never
 ///    spans a window boundary. Overlap classes (4–6) are marked, not treated
 ///    as a third speaker.
+/// 5. The frame counter is re-based to each window. Upstream carries it across
+///    windows, but the model emits 589 frames of 270 samples for a 160000-sample
+///    window, so the counter falls 970 samples (~61 ms) behind per window —
+///    about 22 s over an hour, which silently shifts every later speaker turn.
 fn speech_segments(
     samples: &[i16],
     sample_rate: u32,
@@ -650,27 +670,35 @@ fn speech_segments(
         return Err("Invalid sample rate for diarization.".to_string());
     }
 
-    let mut padded = samples.to_vec();
-    let rem = samples.len() % window_size;
-    if rem != 0 {
-        padded.extend(std::iter::repeat_n(0, window_size - rem));
-    }
-    if padded.is_empty() {
+    if samples.is_empty() {
         return Ok(Vec::new());
     }
+    // The model wants a full 10 s window. Only the trailing partial window needs
+    // zero padding, so pad into a small scratch buffer instead of cloning the
+    // whole (multi-hundred-MB) episode.
+    let mut tail = Vec::new();
 
     let mut cur_class: Option<usize> = None;
-    let mut offset = FRAME_START;
     let mut start_offset = 0.0_f64;
     let mut start_window = 0usize;
     let mut out = Vec::new();
 
-    for (window_i, start) in (0..padded.len()).step_by(window_size).enumerate() {
+    for (window_i, start) in (0..samples.len()).step_by(window_size).enumerate() {
         if abort() {
             return Err("Cancelled.".to_string());
         }
-        let end = (start + window_size).min(padded.len());
-        let window = &padded[start..end];
+        // The frame grid restarts with every window. See bug 5 above.
+        let mut frame = 0usize;
+        let mut offset = frame_offset(start, frame);
+        let end = (start + window_size).min(samples.len());
+        let window = if end - start == window_size {
+            &samples[start..end]
+        } else {
+            tail.clear();
+            tail.extend_from_slice(&samples[start..end]);
+            tail.resize(window_size, 0);
+            &tail[..]
+        };
         let samples_n = ndarray::Array1::from_iter(window.iter().map(|&x| x as f32 / 32768.0));
         let view = samples_n.view().insert_axis(Axis(0)).insert_axis(Axis(1));
         let inputs = ort::inputs![TensorRef::from_array_view(view.into_dyn())
@@ -710,7 +738,6 @@ fn speech_segments(
                             offset as f64,
                             sample_rate,
                             samples.len(),
-                            &padded,
                             c,
                             start_window,
                         ));
@@ -723,7 +750,8 @@ fn speech_segments(
                         }
                     }
                 }
-                offset += FRAME_SIZE;
+                frame += 1;
+                offset = frame_offset(start, frame);
             }
         }
 
@@ -734,7 +762,6 @@ fn speech_segments(
                 offset as f64,
                 sample_rate,
                 samples.len(),
-                &padded,
                 c,
                 start_window,
             ));
@@ -754,7 +781,10 @@ fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
                 && (0.0..MERGE_GAP_S).contains(&gap)
             {
                 last.end = seg.end;
-                last.samples.extend(seg.samples);
+                // Contiguous range: the sub-250 ms pause is kept rather than
+                // spliced out, which also avoids a discontinuity in the audio
+                // the embedder sees.
+                last.range.1 = seg.range.1.max(last.range.1);
                 continue;
             }
         }
@@ -768,25 +798,16 @@ fn make_seg(
     end_offset: f64,
     sample_rate: u32,
     samples_len: usize,
-    padded: &[i16],
     class: usize,
     window: usize,
 ) -> SpeechSeg {
     let rate = sample_rate as f64;
-    let start = start_offset / rate;
-    let end = end_offset / rate;
-    let last = samples_len.saturating_sub(1);
-    let start_idx = ((start * rate) as usize).min(last);
-    let end_idx = ((end * rate) as usize).min(samples_len);
-    let slice = if start_idx < end_idx {
-        &padded[start_idx..end_idx]
-    } else {
-        &[]
-    };
+    let start_idx = (start_offset.max(0.0) as usize).min(samples_len);
+    let end_idx = (end_offset.max(0.0) as usize).clamp(start_idx, samples_len);
     SpeechSeg {
-        start: start as f32,
-        end: end as f32,
-        samples: slice.to_vec(),
+        start: (start_offset / rate) as f32,
+        end: (end_offset / rate) as f32,
+        range: (start_idx, end_idx),
         class: class as u8,
         overlap: is_overlap_class(class),
         window,
@@ -873,6 +894,22 @@ mod tests {
         assert_eq!(out, vec![0, 32767, -32767, 32767]);
     }
 
+    /// segmentation-3.0 emits 589 frames of 270 samples for a 160000-sample
+    /// window, so a counter carried across windows falls 970 samples behind each
+    /// time. Verified against the ONNX model: output shape `[1, 589, 7]`.
+    #[test]
+    fn frame_offsets_are_rebased_per_window() {
+        const FRAMES_PER_WINDOW: usize = 589;
+        let window = SAMPLE_RATE as usize * 10;
+        assert_eq!(frame_offset(0, 0), FRAME_START);
+        assert_eq!(frame_offset(window, 0), window + FRAME_START);
+
+        let carried = FRAME_START + FRAMES_PER_WINDOW * FRAME_SIZE;
+        assert_eq!(frame_offset(window, 0) - carried, 970);
+        // ~22 s of drift over an hour of audio if the counter is not re-based.
+        assert_eq!((3600 / 10) * 970 / SAMPLE_RATE as usize, 21);
+    }
+
     #[test]
     fn argmax_picks_largest() {
         assert_eq!(argmax([0.1, 0.9, 0.2]).unwrap(), 1);
@@ -880,11 +917,12 @@ mod tests {
 
     #[test]
     fn make_seg_clamps_to_original_length() {
-        let padded = vec![1_i16, 2, 3, 4, 0, 0];
-        let seg = make_seg(0.0, 4.0, 2, 4, &padded, 1, 0);
-        assert_eq!(seg.samples, vec![1, 2, 3, 4]);
+        let all = vec![1_i16, 2, 3, 4];
+        // Offsets run past the end of the audio; the range must not.
+        let seg = make_seg(0.0, 6.0, 2, 4, 1, 0);
+        assert_eq!(seg.samples(&all), &[1, 2, 3, 4]);
         assert!((seg.start - 0.0).abs() < f32::EPSILON);
-        assert!((seg.end - 2.0).abs() < f32::EPSILON);
+        assert!((seg.end - 3.0).abs() < f32::EPSILON);
         assert_eq!(seg.class, 1);
         assert!(!seg.overlap);
         assert_eq!(seg.window, 0);
@@ -896,54 +934,35 @@ mod tests {
         assert!(!is_overlap_class(3));
         assert!(is_overlap_class(4));
         assert!(is_overlap_class(6));
-        let padded = vec![1_i16, 2];
-        let seg = make_seg(0.0, 2.0, 1, 2, &padded, 5, 1);
+        let seg = make_seg(0.0, 2.0, 1, 2, 5, 1);
         assert!(seg.overlap);
+    }
+
+    fn seg(start: f32, end: f32, range: (usize, usize), window: usize) -> SpeechSeg {
+        SpeechSeg {
+            start,
+            end,
+            range,
+            class: 1,
+            overlap: false,
+            window,
+        }
     }
 
     #[test]
     fn merge_short_gaps_same_window_and_class() {
-        let a = SpeechSeg {
-            start: 0.0,
-            end: 1.0,
-            samples: vec![1, 2],
-            class: 1,
-            overlap: false,
-            window: 0,
-        };
-        let b = SpeechSeg {
-            start: 1.1,
-            end: 2.0,
-            samples: vec![3],
-            class: 1,
-            overlap: false,
-            window: 0,
-        };
-        let merged = merge_short_gaps(vec![a, b]);
+        let all = vec![1_i16, 2, 3, 4];
+        let merged = merge_short_gaps(vec![seg(0.0, 1.0, (0, 2), 0), seg(1.1, 2.0, (3, 4), 0)]);
         assert_eq!(merged.len(), 1);
         assert!((merged[0].end - 2.0).abs() < f32::EPSILON);
-        assert_eq!(merged[0].samples, vec![1, 2, 3]);
+        // The range spans the merged pair, gap included.
+        assert_eq!(merged[0].samples(&all), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn merge_short_gaps_skips_other_window() {
-        let a = SpeechSeg {
-            start: 0.0,
-            end: 1.0,
-            samples: vec![1],
-            class: 1,
-            overlap: false,
-            window: 0,
-        };
-        let b = SpeechSeg {
-            start: 1.1,
-            end: 2.0,
-            samples: vec![2],
-            class: 1,
-            overlap: false,
-            window: 1,
-        };
-        assert_eq!(merge_short_gaps(vec![a, b]).len(), 2);
+        let out = merge_short_gaps(vec![seg(0.0, 1.0, (0, 1), 0), seg(1.1, 2.0, (1, 2), 1)]);
+        assert_eq!(out.len(), 2);
     }
 
     #[test]

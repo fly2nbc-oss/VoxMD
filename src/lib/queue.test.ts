@@ -9,6 +9,7 @@ describe("isAudioPath", () => {
     expect(isAudioPath("talk.mkv")).toBe(true);
     expect(isAudioPath("clip.mka")).toBe(true);
     expect(isAudioPath("voice.aiff")).toBe(true);
+    expect(isAudioPath("voice.aif")).toBe(true);
     expect(isAudioPath("loop.caf")).toBe(true);
   });
 

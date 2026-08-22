@@ -11,7 +11,25 @@ function row(partial: Partial<JobRow> & Pick<JobRow, "stage">): JobRow {
 }
 
 describe("outputPathOf", () => {
-  it("parses Saved paths and strips audio-deletion notes", () => {
+  it("prefers the payload field over the message", () => {
+    expect(
+      outputPathOf(
+        row({ stage: "done", outputPath: "/out/Talk.md", message: "Saved: /out/Talk.md" }),
+      ),
+    ).toBe("/out/Talk.md");
+    // A path containing the deletion-note wording would defeat the regex.
+    expect(
+      outputPathOf(
+        row({
+          stage: "done",
+          outputPath: "/out/a (audio deletion failed: x).md",
+          message: "Saved: /out/a (audio deletion failed: x).md",
+        }),
+      ),
+    ).toBe("/out/a (audio deletion failed: x).md");
+  });
+
+  it("falls back to parsing rows from an older build", () => {
     expect(
       outputPathOf(row({ stage: "done", message: "Saved: /out/Talk.md" })),
     ).toBe("/out/Talk.md");

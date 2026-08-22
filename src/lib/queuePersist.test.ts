@@ -17,8 +17,10 @@ const podcast: QueueItem = {
   episode: { feedTitle: "Feed", title: "Ep", outputDir: "/out" },
 };
 
-function jobs(stage: string): Record<string, JobRow> {
-  return { [local.id]: { path: local.id, displayName: local.displayName, stage } };
+function jobs(stage: string, outputPath?: string): Record<string, JobRow> {
+  return {
+    [local.id]: { path: local.id, displayName: local.displayName, stage, outputPath },
+  };
 }
 
 describe("itemsToPersist", () => {
@@ -27,6 +29,13 @@ describe("itemsToPersist", () => {
     expect(itemsToPersist([local], jobs("error"))).toEqual([local]);
     expect(itemsToPersist([local], jobs("queued"))).toEqual([local]);
     expect(itemsToPersist([local], {})).toEqual([local]);
+  });
+
+  it("tells an already-exported skip apart from a cancelled one", () => {
+    // Markdown exists: finished, nothing to restore on the next start.
+    expect(itemsToPersist([local], jobs("skipped", "/out/Talk.md"))).toEqual([]);
+    // Cancelled before it ran: still outstanding work.
+    expect(itemsToPersist([local], jobs("skipped"))).toEqual([local]);
   });
 });
 

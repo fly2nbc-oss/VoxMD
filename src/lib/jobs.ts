@@ -50,15 +50,14 @@ export function detailsForRow(row: JobRow): string {
 }
 
 /**
- * Recovers the written path from the backend's status message so the row can
- * offer to open it.
+ * The Markdown file this row produced, if any.
  *
- * This parses a human-readable string, which is fragile: `pipeline.rs` produces
- * `Saved: <path>` and `Skipped (exists): <path>`, and changing either wording
- * silently disables the open buttons. A dedicated field on the event payload
- * would be sturdier if this needs to grow.
+ * `outputPath` is a field on the event payload. Rows written by an older build
+ * (restored from the store, or in flight across an update) only carry the
+ * human-readable message, so the previous string parsing stays as a fallback.
  */
 export function outputPathOf(row: JobRow): string | null {
+  if (row.outputPath) return row.outputPath;
   const msg = row.message;
   if (!msg) return null;
   if (row.stage === "done") {

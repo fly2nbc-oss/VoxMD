@@ -15,6 +15,7 @@ import { StatusBar } from "./components/StatusBar";
 import { defaultConfig } from "./defaults";
 import { useBatchEvents } from "./hooks/useBatchEvents";
 import { useConfigStore } from "./hooks/useConfigStore";
+import { useDictationEvents } from "./hooks/useDictationEvents";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { useNativeDrop } from "./hooks/useNativeDrop";
 import { useTheme } from "./hooks/useTheme";
@@ -53,10 +54,12 @@ export default function App() {
     modelDownload,
   } = batch;
 
+  const dictation = useDictationEvents(setStatusMsg);
+  const dictating = dictation.running;
+
   const [items, setItems] = useState<QueueItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<AppMode>("queue");
-  const [dictating, setDictating] = useState(false);
   const [queueHydrated, setQueueHydrated] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -81,6 +84,8 @@ export default function App() {
   const saveTimerRef = useRef<number | undefined>(undefined);
   const processingRef = useRef(false);
   const dictatingRef = useRef(false);
+  /** Mirrors `items` so `addItems` can dedupe without a state updater. */
+  const itemsRef = useRef<QueueItem[]>([]);
 
   useEffect(() => {
     processingRef.current = processing;
@@ -97,12 +102,13 @@ export default function App() {
   useEffect(() => () => window.clearTimeout(saveTimerRef.current), []);
 
   useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
     void invoke<{ available: boolean }>("vulkan_status")
       .then((s) => setVulkanAvailable(s.available))
       .catch(() => setVulkanAvailable(null));
-    void invoke<boolean>("dictation_state")
-      .then(setDictating)
-      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -114,6 +120,7 @@ export default function App() {
         const restored = parseSavedQueue(await loadQueue());
         if (cancelled) return;
         if (restored.length > 0) {
+          itemsRef.current = restored;
           setItems(restored);
           setJobs(
             Object.fromEntries(
@@ -187,27 +194,34 @@ export default function App() {
       .catch(() => setAboutVersion("—"));
   }, [aboutOpen]);
 
-  /** Append new items (deduplicated by id) and queue rows for them. */
+  /** Append new items (deduplicated by id) and queue rows for them.
+   *
+   *  Dedupe and the IPC call run outside the state updaters: React may invoke an
+   *  updater more than once (StrictMode does so in development), which sent the
+   *  same file to `append_to_batch` twice. */
   const addItems = useCallback(
     (added: QueueItem[]) => {
-      setItems((prev) => {
-        const seen = new Set(prev.map((i) => i.id));
-        const fresh = added.filter((i) => !seen.has(i.id));
-        if (fresh.length === 0) return prev;
-        setJobs((prevJobs) => {
-          const next = { ...prevJobs };
-          for (const item of fresh) {
-            next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
-          }
-          return next;
-        });
-        if (processingRef.current) {
-          void invoke("append_to_batch", { items: fresh }).catch((e) =>
-            setStatusMsg(toMsg(e)),
-          );
+      const seen = new Set(itemsRef.current.map((i) => i.id));
+      const fresh: QueueItem[] = [];
+      for (const item of added) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        fresh.push(item);
+      }
+      if (fresh.length === 0) return;
+
+      itemsRef.current = [...itemsRef.current, ...fresh];
+      setItems(itemsRef.current);
+      setJobs((prevJobs) => {
+        const next = { ...prevJobs };
+        for (const item of fresh) {
+          next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
         }
-        return [...prev, ...fresh];
+        return next;
       });
+      if (processingRef.current) {
+        void invoke("append_to_batch", { items: fresh }).catch((e) => setStatusMsg(toMsg(e)));
+      }
       // A finished batch's tally no longer describes the queue.
       setOverall((cur) => (processingRef.current ? cur : null));
     },
@@ -315,7 +329,8 @@ export default function App() {
   const removeSelected = () => {
     const count = selected.size;
     if (count === 0) return;
-    setItems((prev) => prev.filter((i) => !selected.has(i.id)));
+    itemsRef.current = itemsRef.current.filter((i) => !selected.has(i.id));
+    setItems(itemsRef.current);
     setJobs((prev) =>
       Object.fromEntries(Object.entries(prev).filter(([k]) => !selected.has(k))),
     );
@@ -411,10 +426,10 @@ export default function App() {
       return;
     }
     try {
+      // `dictating` flips on the `dictation_status` event, not here: the backend
+      // is the owner, and guessing locally is what let the two drift apart.
       await invoke("start_dictation", { config });
-      setDictating(true);
     } catch (e) {
-      setDictating(false);
       setStatusMsg(toMsg(e));
     }
   };
@@ -582,8 +597,7 @@ export default function App() {
             config={config}
             storeReady={storeReady}
             processing={processing}
-            running={dictating}
-            onRunningChange={setDictating}
+            dictation={dictation}
             onStart={() => void startDictation()}
             onStop={stopDictation}
             onMicrophoneChange={(name) =>

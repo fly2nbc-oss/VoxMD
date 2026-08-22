@@ -1,7 +1,12 @@
 import { Check, FolderOpen, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import { isSummarySystemLanguage, isTranscriptionAuto } from "../lib/configStore";
+import {
+  asMaxSpeakers,
+  isSummarySystemLanguage,
+  isTranscriptionAuto,
+  MAX_SPEAKERS,
+} from "../lib/configStore";
 import { toMsg } from "../lib/jobs";
 import { applyProvider, LLM_PROVIDER_PRESETS } from "../lib/llmProviders";
 import type { ThemeMode } from "../lib/theme";
@@ -111,11 +116,16 @@ export function SettingsDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [providerSwitched, setProviderSwitched] = useState(false);
+
   const onProviderChange = (id: LlmProvider) => {
     const next = applyProvider(config, id);
     onConfigChange(next);
     setVerifyMsg("");
     setVerifyOk(null);
+    // Keys are per provider. Keeping the old one is what makes the next Verify
+    // fail with an opaque 401, so say so instead.
+    setProviderSwitched(id !== config.llmProvider && next.apiKey.trim() !== "");
     void loadLlmModels(next);
   };
 
@@ -182,7 +192,10 @@ export function SettingsDrawer({
               autoComplete="off"
               value={config.apiKey}
               disabled={!config.includeSummary}
-              onChange={(e) => set("apiKey", e.target.value)}
+              onChange={(e) => {
+                setProviderSwitched(false);
+                set("apiKey", e.target.value);
+              }}
             />
             <button
               type="button"
@@ -197,6 +210,10 @@ export function SettingsDrawer({
           </div>
           {verifyMsg ? (
             <p className={`field-hint${verifyOk === false ? " field-hint-warn" : ""}`}>{verifyMsg}</p>
+          ) : providerSwitched ? (
+            <p className="field-hint field-hint-warn">
+              This key was entered for the previous provider — replace it and press Verify.
+            </p>
           ) : config.includeSummary && !hasApiKey ? (
             <p className="field-hint field-hint-warn">Enter a key to generate summaries.</p>
           ) : !config.includeSummary ? (
@@ -454,20 +471,17 @@ export function SettingsDrawer({
             className="input"
             type="number"
             min={0}
-            max={8}
+            max={MAX_SPEAKERS}
             value={config.maxSpeakers}
             disabled={!config.diarizationEnabled}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              set("maxSpeakers", Number.isFinite(n) ? Math.max(0, Math.min(8, Math.round(n))) : 0);
-            }}
+            onChange={(e) => set("maxSpeakers", asMaxSpeakers(Number(e.target.value)))}
           />
           <p className="field-hint">
             Downloads two small ONNX models (~32 MB) on first use into{" "}
             <code>~/.cache/voxmd/diarize/</code>. Each transcript line becomes{" "}
-            <code>[HH:MM:SS] **Speaker N:** …</code>. 0 lets clustering decide (at most 8
-            speakers). Set 2 for a two-person interview. If diarization fails, the unlabeled
-            transcript is kept.
+            <code>[HH:MM:SS] **Speaker N:** …</code>. 0 lets clustering decide (at most{" "}
+            {MAX_SPEAKERS} speakers). Set 2 for a two-person interview. If diarization fails, the
+            unlabeled transcript is kept. Expect noticeably longer processing per file.
           </p>
         </div>
       </section>
