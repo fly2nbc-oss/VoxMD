@@ -1153,24 +1153,28 @@ mod tests {
         let all = crate::audio::decode_file_to_mono_16k(&PathBuf::from(path), || false)
             .expect("decode audio");
         let pcm = to_i16(&all);
-        let picks: [(&str, f32, f32); 6] = [
-            ("A-1", 22.0, 34.0),
-            ("A-2", 80.0, 92.0),
-            ("A-3", 134.0, 146.0),
-            ("B-1", 172.0, 184.0),
-            ("B-2", 190.0, 202.0),
-            ("B-3", 216.0, 228.0),
-        ];
+        // Same spec as the scorer: NAME:from-to, comma separated.
+        let spec = std::env::var("VOXMD_EMBED_PICKS").unwrap_or_else(|_| {
+            "A-1:22-34,A-2:80-92,A-3:134-146,B-1:172-184,B-2:190-202,B-3:216-228".to_string()
+        });
+        let picks: Vec<(String, f32, f32)> = spec
+            .split(',')
+            .filter_map(|part| {
+                let (name, span) = part.trim().split_once(':')?;
+                let (from, to) = span.split_once('-')?;
+                Some((name.to_string(), from.parse().ok()?, to.parse().ok()?))
+            })
+            .collect();
         onnx_runtime::init(&cache_dir()).expect("initialise ONNX Runtime");
         let mut extractor =
             pyannote_rs::EmbeddingExtractor::new(cached(EMB_FILE)).expect("embedder");
         let mut embeddings = Vec::new();
-        for (name, from, to) in picks {
-            let i0 = (from * SAMPLE_RATE as f32) as usize;
-            let i1 = ((to * SAMPLE_RATE as f32) as usize).min(pcm.len());
+        for (name, from, to) in &picks {
+            let i0 = (*from * SAMPLE_RATE as f32) as usize;
+            let i1 = ((*to * SAMPLE_RATE as f32) as usize).min(pcm.len());
             let mut v: Vec<f32> = extractor.compute(&pcm[i0..i1]).expect("embed").collect();
             l2_normalize(&mut v);
-            embeddings.push((name, v));
+            embeddings.push((name.clone(), v));
         }
         let header: String = picks.iter().map(|p| format!("{:>9}", p.0)).collect();
         eprintln!("\n{:8}{header}", "");
@@ -1237,7 +1241,13 @@ mod quality {
             |ex: &mut pyannote_rs::EmbeddingExtractor, a: f32, b: f32| -> Option<Vec<f32>> {
                 let i0 = (a * SAMPLE_RATE as f32) as usize;
                 let i1 = ((b * SAMPLE_RATE as f32) as usize).min(pcm.len());
-                if i1 <= i0 || (i1 - i0) < SAMPLE_RATE as usize * 3 / 2 {
+                // Six seconds, not the 1.5 s an anchor needs. A reference has
+                // to be *right*, not plentiful: at 1.5 s the per-line
+                // embeddings are noise — one speaker's three-minute monologue
+                // came back with labels alternating line by line, and scoring
+                // against that measures nothing. Fewer trustworthy lines beat
+                // many uncertain ones, the same lesson as the anchors.
+                if i1 <= i0 || (i1 - i0) < SAMPLE_RATE as usize * 6 {
                     return None;
                 }
                 let mut v: Vec<f32> = ex.compute(&pcm[i0..i1]).ok()?.collect();
@@ -1333,6 +1343,48 @@ mod quality {
     /// 84.1% over 107 scorable lines, against a 60.7% majority baseline, with
     /// the pipeline emitting five clusters for two speakers. The cluster count
     /// is the open problem — see the note in CLAUDE.md.
+    /// Writes a transcript to TSV so the scorer can be re-run without paying
+    /// for transcription each time. `VOXMD_DUMP_AUDIO`, `VOXMD_DUMP_OUT`.
+    #[test]
+    fn dump_transcript() {
+        let Some(path) = std::env::var_os("VOXMD_DUMP_AUDIO") else {
+            return;
+        };
+        let out = std::env::var("VOXMD_DUMP_OUT").expect("VOXMD_DUMP_OUT");
+        let secs: usize = std::env::var("VOXMD_DUMP_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(720);
+        let all = crate::audio::decode_file_to_mono_16k(&PathBuf::from(path), || false)
+            .expect("decode audio");
+        let n = (secs * SAMPLE_RATE as usize).min(all.len());
+        let model = crate::model_download::cache_dir().join("ggml-large-v3-turbo.bin");
+        assert!(model.is_file(), "missing {}", model.display());
+        let ctx = whisper_rs::WhisperContext::new_with_params(
+            model.to_str().expect("model path"),
+            whisper_rs::WhisperContextParameters {
+                use_gpu: true,
+                ..Default::default()
+            },
+        )
+        .expect("whisper init");
+        let mut state = ctx.create_state().expect("state");
+        let mut params =
+            whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("de"));
+        params.set_n_threads(8);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        state.full(params, &all[..n]).expect("transcribe");
+        let lines = crate::llm::lines_from_state(&state).expect("lines");
+        let mut text = String::new();
+        for l in &lines {
+            text.push_str(&format!("{:.2}\t{:.2}\t{}\n", l.start, l.end, l.text));
+        }
+        std::fs::write(&out, text).expect("write tsv");
+        eprintln!("{} Zeilen -> {out}", lines.len());
+    }
+
     #[test]
     fn accuracy_against_reference() {
         let Some(path) = std::env::var_os("VOXMD_SCORE_AUDIO") else {
@@ -1364,15 +1416,23 @@ mod quality {
             .filter(|l| l.end <= secs as f32)
             .collect();
 
-        // Hand-verified from the transcript content and the distance matrix.
-        let refs: &[(&str, f32, f32)] = &[
-            ("A", 22.0, 34.0),
-            ("A", 80.0, 92.0),
-            ("A", 134.0, 146.0),
-            ("B", 172.0, 184.0),
-            ("B", 190.0, 202.0),
-        ];
-        let gold = reference(&pcm, &lines, refs);
+        // Voice samples, hand-verified by reading the transcript. Per file, so
+        // they come from the environment rather than being wired to one podcast:
+        //   VOXMD_SCORE_REFS="A:22-34,A:80-92,B:172-184,B:190-202"
+        let spec = std::env::var("VOXMD_SCORE_REFS")
+            .unwrap_or_else(|_| "A:22-34,A:80-92,A:134-146,B:172-184,B:190-202".to_string());
+        let owned: Vec<(String, f32, f32)> = spec
+            .split(',')
+            .filter_map(|part| {
+                let (name, span) = part.trim().split_once(':')?;
+                let (from, to) = span.split_once('-')?;
+                Some((name.to_string(), from.parse().ok()?, to.parse().ok()?))
+            })
+            .collect();
+        assert!(owned.len() >= 2, "need at least two voice samples: {spec}");
+        let refs: Vec<(&str, f32, f32)> =
+            owned.iter().map(|(n, a, b)| (n.as_str(), *a, *b)).collect();
+        let gold = reference(&pcm, &lines, &refs);
 
         let (turns, _) = run_diarize(samples, &cached(SEG_FILE), &cached(EMB_FILE), 0, &|| false)
             .expect("diarize");
@@ -1402,6 +1462,18 @@ mod quality {
             dist.join(", "),
             100.0 * majority as f32 / scored.max(1) as f32
         );
+
+        if std::env::var_os("VOXMD_SCORE_DUMP").is_some() {
+            for (i, line) in lines.iter().enumerate().take(30) {
+                let g = gold[i].map(|g| g.to_string()).unwrap_or_else(|| "-".into());
+                let p = pred[i].map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+                eprintln!(
+                    "{:7.1}  ref={g}  pred={p}  {}",
+                    line.start,
+                    line.text.chars().take(70).collect::<String>()
+                );
+            }
+        }
 
         let (hit, total) = score(&pred, &gold);
         eprintln!(
