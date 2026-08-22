@@ -28,23 +28,39 @@ const FRAME_START: usize = 721;
 const POWERSET: [&[usize]; 7] = [&[], &[0], &[1], &[2], &[0, 1], &[0, 2], &[1, 2]];
 const LOCAL_SPEAKERS: usize = 3;
 
-/// CAM++ embeddings below this duration are noise; skip them.
-const MIN_EMBED_S: f32 = 0.4;
-/// Anchors for clustering: long enough for a stable voiceprint, mostly clean.
-const MIN_ANCHOR_S: f32 = 1.5;
+/// Excerpt lengths handed to the embedder, longest first.
+///
+/// Every excerpt must be the *same* length: CAM++ embeddings move with duration
+/// far more than with identity. Measured on one voice, a 4.8 s excerpt sat 0.96
+/// from a 9.9 s excerpt of the same person — further apart than two different
+/// people ever were, which let "how long was this" outrank "who is speaking".
+/// At a fixed length the same voice stays within 0.20 and two voices never come
+/// closer than 0.69.
+///
+/// Both entries were measured on real episodes; 6 s separates most cleanly
+/// (same ≤0.20, other ≥0.71), 4 s is the fallback for material where nobody
+/// speaks six uninterrupted seconds (same ≤0.32, other ≥0.69). Lengths between
+/// them were *not* interchangeable — 3 s and 5 s collapsed every distance
+/// toward zero — so do not interpolate: measure before adding one.
+const EMBED_LENS: [f32; 2] = [6.0, 4.0];
+/// Below this many usable anchors, drop to the next shorter excerpt length.
+const MIN_ANCHORS: usize = 8;
+/// Spans this close together are one stretch of speech with a breath in it, so
+/// the pause is kept in the audio rather than cut out. Anything longer is where
+/// the other voice sits, and the stretch ends there.
+const MAX_EMBED_GAP_S: f32 = 0.5;
 const MAX_ANCHORS: usize = 600;
 /// Average-linkage cosine distance below which two clusters merge in auto mode.
 ///
-/// Measured directly, on stretches whose speaker is known from the transcript:
-/// two takes of the same voice land at 0.07–0.18, two different voices at
-/// 0.55–0.67. There is a wide empty band between, and 0.40 sits in the middle
-/// of it with room on both sides.
+/// Measured on the anchors the clusterer actually receives, not on hand-cut
+/// excerpts: at a fixed excerpt length the same voice stays within 0.20 (6 s)
+/// or 0.32 (4 s), and two voices never come closer than 0.69. 0.45 sits in that
+/// empty band for both lengths.
 ///
-/// The number is only meaningful together with the segmentation. Tuning it
-/// against the old window-chopped segments suggested 0.65 — which is *above*
-/// the cross-speaker band and merges everyone into one cluster. Short segments
-/// give noisy embeddings; fix the segmentation before touching this.
-const CLUSTER_DIST: f32 = 0.40;
+/// The number is only meaningful together with how anchors are built. Tuned
+/// against variable-length anchors it was hopeless at any value — that spread
+/// ran to 0.99 within a single speaker. Fix the anchors before touching this.
+const CLUSTER_DIST: f32 = 0.45;
 /// Drop clusters whose total anchored speech is shorter than this (auto mode).
 const MIN_CLUSTER_S: f32 = 3.0;
 /// Turns shorter than this are absorbed into the longer neighbour.
@@ -219,32 +235,85 @@ fn run_diarize(
     let mut units = window_speakers(&samples, SAMPLE_RATE, seg_path, abort)?;
     let duration_hist = duration_histogram(units.iter().map(|u| frames_to_secs(u.frames)));
 
-    for unit in units.iter_mut() {
+    let runs: Vec<Option<(usize, usize)>> = units.iter().map(embed_span).collect();
+    let embed_len = pick_embed_len(&runs, samples.len());
+
+    for (unit, run) in units.iter_mut().zip(&runs) {
         if abort() {
             return Err("Cancelled.".to_string());
         }
-        if frames_to_secs(unit.frames) < MIN_EMBED_S {
+        let Some((from, to)) = *run else { continue };
+        let Some((a, b)) = embed_excerpt(from, to, samples.len(), embed_len) else {
             continue;
-        }
-        // Only this speaker's own frames, spliced together — the other voice in
-        // the window contributes nothing to the voiceprint.
-        let mut audio = Vec::with_capacity(unit.frames * FRAME_SIZE);
-        for &(from, to) in &unit.spans {
-            let a = frame_offset(0, from).min(samples.len());
-            let b = frame_offset(0, to).clamp(a, samples.len());
-            audio.extend_from_slice(&samples[a..b]);
-        }
-        if audio.is_empty() {
-            continue;
-        }
-        if let Ok(iter) = extractor.compute(&audio) {
+        };
+        if let Ok(iter) = extractor.compute(&samples[a..b]) {
             let mut v: Vec<f32> = iter.collect();
             l2_normalize(&mut v);
             unit.embedding = Some(v);
         }
     }
 
-    cluster_and_assign(&units, target_k, duration_hist, samples.len())
+    cluster_and_assign(&units, target_k, duration_hist, samples.len(), embed_len)
+}
+
+/// The stretch of a unit that gets embedded.
+///
+/// Not the concatenation of every span: splicing disjoint spans puts a step
+/// discontinuity at each junction, and CAM++ reads those transients as voice.
+/// Measured on a single-speaker intro, spliced windows landed 0.42–0.58 from
+/// contiguous ones — as far apart as two different people, and enough to make
+/// "how often was this spliced" outrank "who is speaking" in the clustering.
+/// One real waveform, still one speaker by construction, separates cleanly.
+fn pick_embed_len(runs: &[Option<(usize, usize)>], samples_len: usize) -> f32 {
+    let last = *EMBED_LENS.last().expect("EMBED_LENS is not empty");
+    EMBED_LENS
+        .iter()
+        .copied()
+        .find(|&want| {
+            runs.iter()
+                .filter(|run| {
+                    run.is_some_and(|(a, b)| embed_excerpt(a, b, samples_len, want).is_some())
+                })
+                .count()
+                >= MIN_ANCHORS
+        })
+        .unwrap_or(last)
+}
+
+fn embed_span(unit: &WindowSpeaker) -> Option<(usize, usize)> {
+    let longer = |c: &Option<(usize, usize)>| c.map_or(0, |(a, b)| b - a);
+    let mut best: Option<(usize, usize)> = None;
+    let mut run: Option<(usize, usize)> = None;
+    for &(from, to) in &unit.spans {
+        run = match run {
+            Some((a, b)) if frames_to_secs(from.saturating_sub(b)) <= MAX_EMBED_GAP_S => {
+                Some((a, to))
+            }
+            other => {
+                best = std::cmp::max_by_key(best, other, longer);
+                Some((from, to))
+            }
+        };
+    }
+    std::cmp::max_by_key(best, run, longer)
+}
+
+/// The exact slice handed to the embedder: `want_s` seconds centred in the run,
+/// or nothing when the run is shorter. See [`EMBED_LENS`] for why it is fixed.
+fn embed_excerpt(
+    from: usize,
+    to: usize,
+    samples_len: usize,
+    want_s: f32,
+) -> Option<(usize, usize)> {
+    let want = (want_s * SAMPLE_RATE as f32) as usize;
+    let a = frame_offset(0, from);
+    let b = frame_offset(0, to).min(samples_len);
+    if b.saturating_sub(a) < want {
+        return None;
+    }
+    let start = a + (b - a - want) / 2;
+    Some((start, start + want))
 }
 
 fn frames_to_secs(frames: usize) -> f32 {
@@ -257,12 +326,13 @@ fn cluster_and_assign(
     target_k: Option<usize>,
     duration_hist: [usize; 5],
     samples_len: usize,
+    min_anchor_s: f32,
 ) -> Result<(Vec<SpeakerTurn>, DiarizeStats), String> {
     let n_with_embed = units.iter().filter(|u| u.embedding.is_some()).count();
     let mut anchor_idx: Vec<usize> = units
         .iter()
         .enumerate()
-        .filter(|(_, u)| u.embedding.is_some() && frames_to_secs(u.frames) >= MIN_ANCHOR_S)
+        .filter(|(_, u)| u.embedding.is_some() && frames_to_secs(u.frames) >= min_anchor_s)
         .map(|(i, _)| i)
         .collect();
 
@@ -394,20 +464,13 @@ fn turns_from_votes(votes: &[Vec<f32>], samples_len: usize) -> Vec<SpeakerTurn> 
     out
 }
 
+/// Upper edges of the reported duration buckets, in seconds.
+const HIST_EDGES_S: [f32; 4] = [1.0, 4.0, 6.0, 10.0];
+
 fn duration_histogram(durs: impl IntoIterator<Item = f32>) -> [usize; 5] {
     let mut hist = [0usize; 5];
     for d in durs {
-        let slot = if d < MIN_EMBED_S {
-            0
-        } else if d < MIN_ANCHOR_S {
-            1
-        } else if d < 5.0 {
-            2
-        } else if d < 10.0 {
-            3
-        } else {
-            4
-        };
+        let slot = HIST_EDGES_S.iter().filter(|&&edge| d >= edge).count();
         hist[slot] += 1;
     }
     hist
@@ -1187,6 +1250,183 @@ mod tests {
         }
     }
 
+    /// A pause inside one person's sentence stays in the audio; the other
+    /// voice ends the stretch. Splicing across it instead put a step
+    /// discontinuity in the waveform that CAM++ read as a different speaker.
+    #[test]
+    fn embed_span_keeps_a_breath_but_ends_at_the_other_voice() {
+        let unit = |spans: Vec<(usize, usize)>| WindowSpeaker {
+            spans,
+            frames: 0,
+            embedding: None,
+        };
+        // 20 frames is 0.34 s — a breath, so both spans and the gap are one run.
+        assert_eq!(
+            embed_span(&unit(vec![(0, 100), (120, 200)])),
+            Some((0, 200))
+        );
+        // 200 frames is 3.4 s — the other voice. The longer side wins.
+        assert_eq!(
+            embed_span(&unit(vec![(0, 100), (300, 480)])),
+            Some((300, 480))
+        );
+        assert_eq!(embed_span(&unit(vec![])), None);
+    }
+
+    /// Every excerpt is the same length or there is none: a shorter one embeds
+    /// nowhere near the same voice's longer ones.
+    #[test]
+    fn embed_excerpt_is_one_fixed_length_or_nothing() {
+        let plenty = usize::MAX / 2;
+        let want = EMBED_LENS[0];
+        let (a, b) = embed_excerpt(0, 600, plenty, want).expect("600 frames is over 10 s");
+        assert_eq!(b - a, (want * SAMPLE_RATE as f32) as usize);
+        // Centred in the run.
+        assert_eq!(a - frame_offset(0, 0), frame_offset(0, 600) - b);
+        assert_eq!(embed_excerpt(0, 100, plenty, want), None);
+    }
+
+    #[test]
+    fn pick_embed_len_falls_back_when_nobody_speaks_long_enough() {
+        let plenty = usize::MAX / 2;
+        let runs = |to: usize| vec![Some((0usize, to)); MIN_ANCHORS];
+        assert_eq!(pick_embed_len(&runs(600), plenty), EMBED_LENS[0]);
+        // 300 frames is 5.1 s: short of the 6 s excerpt, long enough for 4 s.
+        assert_eq!(pick_embed_len(&runs(300), plenty), EMBED_LENS[1]);
+        // One anchor short of the quorum also drops down.
+        assert_eq!(
+            pick_embed_len(&[Some((0, 600)); MIN_ANCHORS - 1], plenty),
+            EMBED_LENS[1]
+        );
+        assert_eq!(pick_embed_len(&[], plenty), EMBED_LENS[1]);
+    }
+
+    /// Embeds the pipeline's OWN anchors and scores them against known voices.
+    ///
+    /// [`embedding_distance_matrix`] only ever proved that the embedder can tell
+    /// two voices apart on hand-cut excerpts. It says nothing about the units
+    /// clustering actually receives, and that is where every failure was: every
+    /// anchor falling entirely inside a hand-verified stretch gets that
+    /// stretch's speaker, and the within/between distances are printed.
+    ///
+    /// What it found, on a single speaker's uninterrupted intro: anchors of one
+    /// person spread to 0.99 — wider than two people ever were — because the
+    /// audio was spliced across pauses and the excerpts differed in length.
+    /// With [`EMBED_LENS`] in place the same run reads: same voice ≤0.20, other
+    /// voice ≥0.71.
+    ///
+    /// `VOXMD_ANCHOR_AUDIO` picks the file, `VOXMD_ANCHOR_REFS` the verified
+    /// stretches (`A:0-50,B:182-232`, seconds), `VOXMD_ANCHOR_FIXED` overrides
+    /// the excerpt length, `VOXMD_ANCHOR_DUMP` adds the full distance matrix.
+    #[test]
+    fn anchor_purity() {
+        let Some(path) = std::env::var_os("VOXMD_ANCHOR_AUDIO") else {
+            return;
+        };
+        let refs: Vec<(String, f32, f32)> = std::env::var("VOXMD_ANCHOR_REFS")
+            .expect("VOXMD_ANCHOR_REFS")
+            .split(',')
+            .filter_map(|part| {
+                let (name, span) = part.trim().split_once(':')?;
+                let (from, to) = span.split_once('-')?;
+                Some((name.to_string(), from.parse().ok()?, to.parse().ok()?))
+            })
+            .collect();
+
+        let all = crate::audio::decode_file_to_mono_16k(&PathBuf::from(path), || false)
+            .expect("decode audio");
+        let samples = to_i16(&all);
+        onnx_runtime::init(&cache_dir()).expect("initialise ONNX Runtime");
+        let mut units =
+            window_speakers(&samples, SAMPLE_RATE, &cached(SEG_FILE), &|| false).expect("segment");
+        let mut extractor =
+            pyannote_rs::EmbeddingExtractor::new(cached(EMB_FILE)).expect("embedder");
+
+        let want = std::env::var("VOXMD_ANCHOR_FIXED")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(EMBED_LENS[0]);
+        let mut tagged: Vec<(String, f32, Vec<f32>)> = Vec::new();
+        for unit in units.iter_mut() {
+            let Some(run) = embed_span(unit) else {
+                continue;
+            };
+            let lo = frame_offset(0, unit.spans.first().map(|s| s.0).unwrap_or(0)) as f32
+                / SAMPLE_RATE as f32;
+            let hi = frame_offset(0, unit.spans.last().map(|s| s.1).unwrap_or(0)) as f32
+                / SAMPLE_RATE as f32;
+            let Some((name, _, _)) = refs.iter().find(|(_, a, b)| lo >= *a && hi <= *b) else {
+                continue;
+            };
+            let (from, to) = run;
+            let Some((a, b)) = embed_excerpt(from, to, samples.len(), want) else {
+                continue;
+            };
+            let audio = &samples[a..b];
+            if std::env::var_os("VOXMD_ANCHOR_DUMP").is_some() {
+                eprintln!(
+                    "  spans={:3} lo={:7.2}s hi={:7.2}s aktiv={:5.2}s audio={:5.2}s",
+                    unit.spans.len(),
+                    lo,
+                    hi,
+                    frames_to_secs(unit.frames),
+                    audio.len() as f32 / SAMPLE_RATE as f32
+                );
+            }
+            if let Ok(iter) = extractor.compute(audio) {
+                let mut v: Vec<f32> = iter.collect();
+                l2_normalize(&mut v);
+                tagged.push((name.clone(), frames_to_secs(unit.frames), v));
+            }
+        }
+
+        eprintln!(
+            "
+Anker mit bekannter Stimme: {}",
+            tagged.len()
+        );
+        let mut within: Vec<f32> = Vec::new();
+        let mut between: Vec<f32> = Vec::new();
+        for (i, (na, _, a)) in tagged.iter().enumerate() {
+            for (nb, _, b) in tagged.iter().skip(i + 1) {
+                let d = cosine_dist(a, b);
+                if na == nb {
+                    within.push(d)
+                } else {
+                    between.push(d)
+                }
+            }
+        }
+        let stat = |v: &mut Vec<f32>| {
+            if v.is_empty() {
+                return "-".to_string();
+            }
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            format!(
+                "n={} min={:.3} med={:.3} p90={:.3} max={:.3}",
+                v.len(),
+                v[0],
+                v[v.len() / 2],
+                v[v.len() * 9 / 10],
+                v[v.len() - 1]
+            )
+        };
+        eprintln!("gleiche Stimme:  {}", stat(&mut within));
+        eprintln!("andere Stimme:   {}", stat(&mut between));
+        if std::env::var_os("VOXMD_ANCHOR_DUMP").is_none() {
+            return;
+        }
+        let header: String = (0..tagged.len()).map(|i| format!("{i:>7}")).collect();
+        eprintln!("\n{:6}{header}", "");
+        for (i, (na, sa, a)) in tagged.iter().enumerate() {
+            let row: String = tagged
+                .iter()
+                .map(|(_, _, b)| format!("{:7.3}", cosine_dist(a, b)))
+                .collect();
+            eprintln!("{i:2} {na:>2}{sa:4.1}{row}");
+        }
+    }
+
     /// Set `VOXMD_DIARIZE_AUDIO` to an episode file to print clustering stats.
     /// Without the variable this is a no-op so the suite stays green.
     #[test]
@@ -1434,8 +1674,18 @@ mod quality {
             owned.iter().map(|(n, a, b)| (n.as_str(), *a, *b)).collect();
         let gold = reference(&pcm, &lines, &refs);
 
-        let (turns, _) = run_diarize(samples, &cached(SEG_FILE), &cached(EMB_FILE), 0, &|| false)
-            .expect("diarize");
+        let forced: u8 = std::env::var("VOXMD_SCORE_SPEAKERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let (turns, _) = run_diarize(
+            samples,
+            &cached(SEG_FILE),
+            &cached(EMB_FILE),
+            forced,
+            &|| false,
+        )
+        .expect("diarize");
         let mut pred = speakers_for_lines(&lines, &turns);
         smooth_speaker_outliers(&lines, &mut pred);
 
@@ -1463,8 +1713,12 @@ mod quality {
             100.0 * majority as f32 / scored.max(1) as f32
         );
 
-        if std::env::var_os("VOXMD_SCORE_DUMP").is_some() {
-            for (i, line) in lines.iter().enumerate().take(30) {
+        if let Some(dump) = std::env::var_os("VOXMD_SCORE_DUMP") {
+            let n = dump
+                .to_str()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(30);
+            for (i, line) in lines.iter().enumerate().take(n) {
                 let g = gold[i].map(|g| g.to_string()).unwrap_or_else(|| "-".into());
                 let p = pred[i].map(|p| p.to_string()).unwrap_or_else(|| "-".into());
                 eprintln!(
