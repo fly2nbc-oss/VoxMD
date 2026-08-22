@@ -3,6 +3,7 @@ import { en } from "../i18n/en";
 import { format, messagesFor, type MessageKey } from "../i18n";
 import {
   activeJobs,
+  formatBytes,
   badgeForStage,
   detailsForRow,
   jobPercent,
@@ -204,5 +205,27 @@ describe("jobPercent", () => {
     expect(jobPercent(row({ stage: "diarize" }))).toBeNull();
     expect(jobPercent(row({ stage: "llm" }))).toBeNull();
     expect(jobPercent(row({ stage: "whisper" }))).toBeNull();
+  });
+});
+
+describe("formatBytes", () => {
+  it("uses binary units, matching what a file manager reports", () => {
+    expect(formatBytes(1024)).toBe("1 KB");
+    expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
+    // The real Whisper turbo model.
+    expect(formatBytes(1_624_555_275)).toBe("1.5 GB");
+    // The real diarization set.
+    expect(formatBytes(20_100_000 + 5_983_836 + 29_292_684)).toBe("52.8 MB");
+  });
+
+  it("drops the decimal once the number is large enough not to need it", () => {
+    expect(formatBytes(150 * 1024 * 1024)).toBe("150 MB");
+    expect(formatBytes(99 * 1024 * 1024)).toBe("99.0 MB");
+  });
+
+  it("never renders a negative or nonsensical size", () => {
+    expect(formatBytes(0)).toBe("0 MB");
+    expect(formatBytes(-5)).toBe("0 MB");
+    expect(formatBytes(Number.NaN)).toBe("0 MB");
   });
 });

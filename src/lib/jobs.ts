@@ -169,6 +169,26 @@ export function settleStrandedRows(
   return { jobs: stranded.length ? next : jobs, stranded };
 }
 
+/**
+ * Human-readable byte size.
+ *
+ * Binary units, because that is what a file manager shows for a model on disk
+ * and a mismatch between the two reads as a bug. One decimal from MB up; whole
+ * numbers below, where a tenth of a kilobyte means nothing.
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const decimals = unit >= 2 && value < 100 ? 1 : 0;
+  return `${value.toFixed(decimals)} ${units[unit]}`;
+}
+
 export function toMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

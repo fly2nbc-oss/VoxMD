@@ -310,5 +310,8 @@ export const de: Messages = {
   "status.countsFailed": "{failed} fehlgeschlagen",
   "status.countsSep": " · ",
   "status.nothing": "Warteschlange ist leer",
+  "settings.modelCacheSize": "{size} belegt",
+  "settings.modelCacheDir": "in {dir}",
+  "settings.freeSpaceTitle": "Alle geladenen Modelle löschen — Whisper und die Sprecher-Dateien",
   "msg.batchComplete": "Stapel abgeschlossen.",
 };

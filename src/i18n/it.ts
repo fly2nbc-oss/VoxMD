@@ -310,5 +310,8 @@ export const it: Messages = {
   "status.countsFailed": "{failed} non riusciti",
   "status.countsSep": " · ",
   "status.nothing": "Coda vuota",
+  "settings.modelCacheSize": "{size} occupati",
+  "settings.modelCacheDir": "in {dir}",
+  "settings.freeSpaceTitle": "Elimina tutti i modelli scaricati — Whisper e i file dei parlanti",
   "msg.batchComplete": "Lotto completato.",
 };

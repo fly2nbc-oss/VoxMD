@@ -28,6 +28,7 @@ import type {
   AppConfig,
   AppMode,
   EpisodeInfo,
+  ModelCacheStats,
   PodcastRecent,
   QueueItem,
   WhisperModelInfo,
@@ -92,6 +93,7 @@ export default function App() {
    *  then, which briefly rendered the custom-path field holding a preset name. */
   const [modelInfos, setModelInfos] = useState<WhisperModelInfo[] | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
+  const [cacheStats, setCacheStats] = useState<ModelCacheStats | null>(null);
   const [vulkanAvailable, setVulkanAvailable] = useState<boolean | null>(null);
   const [detectedSystemSummaryLang, setDetectedSystemSummaryLang] =
     useState("");
@@ -194,6 +196,13 @@ export default function App() {
         tRef.current("msg.modelListUnavailable", { error: toMsg(e) }),
       );
     }
+    // Size covers the diarization files and the ONNX Runtime too, so it cannot
+    // be derived from the Whisper preset list; the backend adds it up.
+    try {
+      setCacheStats(await invoke<ModelCacheStats>("model_cache_stats"));
+    } catch {
+      setCacheStats(null);
+    }
   }, [setStatusMsg]);
 
   // Refreshed on open so the cached (✓) markers reflect reality. The guard stops
@@ -208,6 +217,14 @@ export default function App() {
         invoke<string>("system_summary_language"),
       ]);
       if (cancelled) return;
+
+      void invoke<ModelCacheStats>("model_cache_stats")
+        .then((stats) => {
+          if (!cancelled) setCacheStats(stats);
+        })
+        .catch(() => {
+          if (!cancelled) setCacheStats(null);
+        });
 
       if (models.status === "fulfilled") {
         setModelInfos(models.value);
@@ -726,6 +743,7 @@ export default function App() {
             modelInfos={modelInfos ?? []}
             modelsLoading={modelInfos === null}
             clearingCache={clearingCache}
+            cacheStats={cacheStats}
             onClearCache={() => void clearCache()}
             onPickWhisperModelFile={() => void pickModelFile("whisperModel")}
             onPickDictationModelFile={() =>

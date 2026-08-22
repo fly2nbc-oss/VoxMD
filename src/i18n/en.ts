@@ -311,6 +311,9 @@ export const en = {
   "status.countsFailed": "{failed} failed",
   "status.countsSep": " · ",
   "status.nothing": "Queue is empty",
+  "settings.modelCacheSize": "{size} on disk",
+  "settings.modelCacheDir": "in {dir}",
+  "settings.freeSpaceTitle": "Delete every downloaded model — Whisper and the speaker files",
   "msg.batchComplete": "Batch complete.",
 } as const;
 

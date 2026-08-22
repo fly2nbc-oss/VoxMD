@@ -23,7 +23,7 @@ import {
   type UiLanguageSetting,
 } from "../i18n";
 import { asMaxSpeakers, isSummarySystemLanguage, isTranscriptionAuto } from "../lib/configStore";
-import { toMsg } from "../lib/jobs";
+import { formatBytes, toMsg } from "../lib/jobs";
 import {
   applyProvider,
   isLocalEndpoint,
@@ -38,7 +38,13 @@ import {
   type SettingsTab,
 } from "../lib/settingsSearch";
 import type { ThemeMode } from "../lib/theme";
-import type { AppConfig, LlmModelInfo, LlmProvider, WhisperModelInfo } from "../types";
+import type {
+  AppConfig,
+  LlmModelInfo,
+  LlmProvider,
+  ModelCacheStats,
+  WhisperModelInfo,
+} from "../types";
 import { LanguagePicker } from "./LanguagePicker";
 import { Modal } from "./Modal";
 
@@ -76,6 +82,7 @@ interface Props {
   modelInfos: WhisperModelInfo[];
   modelsLoading: boolean;
   clearingCache: boolean;
+  cacheStats: ModelCacheStats | null;
   onClearCache: () => void;
   onPickWhisperModelFile: () => void;
   onPickDictationModelFile: () => void;
@@ -99,6 +106,7 @@ export function SettingsDrawer({
   modelInfos,
   modelsLoading,
   clearingCache,
+  cacheStats,
   onClearCache,
   onPickWhisperModelFile,
   onPickDictationModelFile,
@@ -135,7 +143,10 @@ export function SettingsDrawer({
   const urlLocked = config.llmProvider !== "custom";
   // Judged by the URL, not the preset: a Custom provider may also be local.
   const providerIsLocal = isLocalEndpoint(config.apiBaseUrl);
-  const cachedCount = modelInfos.filter((m) => m.cached).length;
+  // From the backend where available: it counts the diarization files and the
+  // ONNX Runtime too, which the Whisper preset list knows nothing about.
+  const cacheFiles = cacheStats?.files ?? modelInfos.filter((m) => m.cached).length;
+  const cacheBytes = cacheStats?.bytes ?? 0;
 
   const dirtyFields = useMemo(
     () => changedFields(config, savedConfig),
@@ -602,18 +613,28 @@ export function SettingsDrawer({
 
           <div className={`cache-row${ring("whisperCache")}`}>
             <span>
-              <span className="option-title">{t("settings.modelCacheLine")}</span>
+              <span className="option-title">
+                {t("settings.modelCacheLine")}
+                {/* Size, not just a count: the difference between two cached
+                    models is 0.5 GB or 3 GB depending on which two. */}
+                {cacheBytes > 0 ? (
+                  <span className="badge badge-neutral">
+                    {t("settings.modelCacheSize", { size: formatBytes(cacheBytes) })}
+                  </span>
+                ) : null}
+              </span>
               <span className="field-hint">
-                {cachedCount === 0
+                {cacheFiles === 0
                   ? t("settings.modelCacheNone")
-                  : t("settings.modelCacheSome", { count: cachedCount })}
+                  : t("settings.modelCacheSome", { count: cacheFiles })}
+                {cacheStats?.dir ? ` · ${t("settings.modelCacheDir", { dir: cacheStats.dir })}` : ""}
               </span>
             </span>
             <button
               type="button"
               className="btn-secondary btn-sm nowrap"
-              title={t("settings.clearCacheTitle")}
-              disabled={clearingCache || cachedCount === 0}
+              title={t("settings.freeSpaceTitle")}
+              disabled={clearingCache || cacheFiles === 0}
               onClick={onClearCache}
             >
               {clearingCache ? <Loader2 size={13} className="icon spin" aria-hidden /> : null}

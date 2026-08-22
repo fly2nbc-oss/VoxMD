@@ -310,5 +310,8 @@ export const es: Messages = {
   "status.countsFailed": "{failed} fallidos",
   "status.countsSep": " · ",
   "status.nothing": "La cola está vacía",
+  "settings.modelCacheSize": "{size} en disco",
+  "settings.modelCacheDir": "en {dir}",
+  "settings.freeSpaceTitle": "Eliminar todos los modelos descargados — Whisper y los archivos de hablantes",
   "msg.batchComplete": "Lote completado.",
 };

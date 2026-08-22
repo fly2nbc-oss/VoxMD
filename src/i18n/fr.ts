@@ -311,5 +311,8 @@ export const fr: Messages = {
   "status.countsFailed": "{failed} en échec",
   "status.countsSep": " · ",
   "status.nothing": "File d’attente vide",
+  "settings.modelCacheSize": "{size} sur le disque",
+  "settings.modelCacheDir": "dans {dir}",
+  "settings.freeSpaceTitle": "Supprimer tous les modèles téléchargés — Whisper et les fichiers de locuteurs",
   "msg.batchComplete": "Lot terminé.",
 };

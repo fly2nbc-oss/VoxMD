@@ -118,6 +118,14 @@ export interface ModelDownloadPayload {
   pct?: number;
 }
 
+/** Disk use of the downloaded models (`model_cache_stats`). */
+export interface ModelCacheStats {
+  files: number;
+  bytes: number;
+  /** Where they live, shown so it is obvious what "free up space" deletes. */
+  dir: string;
+}
+
 /** One entry in the whisper model dropdown (`list_whisper_models`). */
 export interface WhisperModelInfo {
   name: string;
