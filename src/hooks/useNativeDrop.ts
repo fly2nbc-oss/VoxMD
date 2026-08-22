@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MessageKey } from "../i18n";
 import { isAudioPath, localItem } from "../lib/queue";
 import type { QueueItem } from "../types";
@@ -9,7 +9,8 @@ import type { QueueItem } from "../types";
  * real filesystem paths, so this cannot be done with DOM handlers.
  *
  * `t` is a parameter for the same reason as in `useBatchEvents`: this runs in
- * the component that provides the i18n context.
+ * the component that provides the i18n context. It is read through a ref so a
+ * language change does not tear down and re-register the drop listener.
  */
 export function useNativeDrop(
   addItems: (items: QueueItem[]) => void,
@@ -17,6 +18,10 @@ export function useNativeDrop(
   t: (key: MessageKey, params?: Record<string, string | number>) => string,
 ): boolean {
   const [dragActive, setDragActive] = useState(false);
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -44,11 +49,11 @@ export function useNativeDrop(
         if (ignored > 0) {
           onStatus(
             audio.length > 0
-              ? t("msg.filesAddedIgnored", { added: audio.length, ignored })
-              : t("msg.noSupportedFiles"),
+              ? tRef.current("msg.filesAddedIgnored", { added: audio.length, ignored })
+              : tRef.current("msg.noSupportedFiles"),
           );
         } else if (audio.length > 0) {
-          onStatus(t("msg.filesAdded", { count: audio.length }));
+          onStatus(tRef.current("msg.filesAdded", { count: audio.length }));
         }
       });
       if (cancelled) stop();
@@ -59,7 +64,7 @@ export function useNativeDrop(
       cancelled = true;
       unlisten?.();
     };
-  }, [addItems, onStatus, t]);
+  }, [addItems, onStatus]);
 
   return dragActive;
 }

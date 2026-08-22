@@ -103,6 +103,17 @@ export default function App() {
   const dictatingRef = useRef(false);
   /** Mirrors `items` so `addItems` can dedupe without a state updater. */
   const itemsRef = useRef<QueueItem[]>([]);
+  /**
+   * Effects that only use `t` on an error path read it here instead of listing
+   * it as a dependency. The queue-restore effect in particular must run exactly
+   * once: re-running it reloads the queue from disk and would discard anything
+   * added since.
+   */
+  const tRef = useRef(t);
+
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   useEffect(() => {
     processingRef.current = processing;
@@ -156,7 +167,7 @@ export default function App() {
         loaded = true;
       } catch (e) {
         if (!cancelled)
-          setStatusMsg(t("msg.queueRestoreFailed", { error: toMsg(e) }));
+          setStatusMsg(tRef.current("msg.queueRestoreFailed", { error: toMsg(e) }));
       } finally {
         if (!cancelled && loaded) setQueueHydrated(true);
       }
@@ -164,7 +175,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [storeReady, loadQueue, setJobs, setStatusMsg, t]);
+  }, [storeReady, loadQueue, setJobs, setStatusMsg]);
 
   useEffect(() => {
     if (!queueHydrated) return;
@@ -179,9 +190,9 @@ export default function App() {
       setModelInfos(await invoke<WhisperModelInfo[]>("list_whisper_models"));
     } catch (e) {
       setModelInfos([]);
-      setStatusMsg(t("msg.modelListUnavailable", { error: toMsg(e) }));
+      setStatusMsg(tRef.current("msg.modelListUnavailable", { error: toMsg(e) }));
     }
-  }, [setStatusMsg, t]);
+  }, [setStatusMsg]);
 
   // Refreshed on open so the cached (✓) markers reflect reality. The guard stops
   // a slow response from writing state after the drawer has been closed again.
@@ -201,7 +212,7 @@ export default function App() {
       } else {
         setModelInfos([]);
         setStatusMsg(
-          t("msg.modelListUnavailable", { error: toMsg(models.reason) }),
+          tRef.current("msg.modelListUnavailable", { error: toMsg(models.reason) }),
         );
       }
       setDetectedSystemSummaryLang(
@@ -212,7 +223,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [settingsOpen, setStatusMsg, t]);
+  }, [settingsOpen, setStatusMsg]);
 
   useEffect(() => {
     if (!aboutOpen) return;

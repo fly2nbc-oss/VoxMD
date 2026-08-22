@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DictationEvents } from "../hooks/useDictationEvents";
 import { useT } from "../i18n/I18nProvider";
 import { toMsg } from "../lib/jobs";
+import { canCallLlm } from "../lib/llmProviders";
 import type { AppConfig, MicrophoneInfo } from "../types";
 
 /**
@@ -61,11 +62,19 @@ export function DictationView({
   const [proposal, setProposal] = useState<string | null>(null);
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
   const lastAppliedSeq = useRef(0);
+  // The microphone effects only use `t` in their error paths. Keeping it in the
+  // dependency arrays would tear down and reopen the capture stream whenever the
+  // interface language changes.
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const [aiBusy, setAiBusy] = useState<"improve" | "translate" | null>(null);
   const [translateTarget, setTranslateTarget] = useState("English");
   const [copied, setCopied] = useState(false);
 
-  const hasApiKey = config.apiKey.trim() !== "";
+  // Improve/Translate need a reachable LLM, which a local server is without a key.
+  const llmReachable = canCallLlm(config);
   const displayText = useMemo(() => {
     const head = committed.trimEnd();
     if (!partial.trim()) return head;
@@ -79,12 +88,12 @@ export function DictationView({
         if (!cancelled) setMics(list);
       })
       .catch((e) => {
-        if (!cancelled) onStatus(t("dictation.micsUnavailable", { error: toMsg(e) }));
+        if (!cancelled) onStatus(tRef.current("dictation.micsUnavailable", { error: toMsg(e) }));
       });
     return () => {
       cancelled = true;
     };
-  }, [onStatus, t]);
+  }, [onStatus]);
 
   const captureOwnsMic = stage === "listening" || stage === "finalizing";
 
@@ -92,13 +101,13 @@ export function DictationView({
     if (captureOwnsMic || processing) return;
     let cancelled = false;
     void invoke("start_mic_monitor", { microphoneName: config.microphoneName }).catch((e) => {
-      if (!cancelled) onStatus(t("dictation.micError", { error: toMsg(e) }));
+      if (!cancelled) onStatus(tRef.current("dictation.micError", { error: toMsg(e) }));
     });
     return () => {
       cancelled = true;
       void invoke("stop_mic_monitor");
     };
-  }, [captureOwnsMic, processing, config.microphoneName, onStatus, t]);
+  }, [captureOwnsMic, processing, config.microphoneName, onStatus]);
 
   // `seq` guards against re-appending the same commit when the view remounts
   // after a mode switch, since the hook keeps the last value around.
@@ -112,7 +121,7 @@ export function DictationView({
 
   const runAi = async (kind: "improve" | "translate") => {
     const text = displayText.trim();
-    if (!text || !hasApiKey) return;
+    if (!text || !llmReachable) return;
     setAiBusy(kind);
     try {
       const next =
@@ -280,7 +289,7 @@ export function DictationView({
           <span>{t("dictation.clear")}</span>
         </button>
 
-        {hasApiKey ? (
+        {llmReachable ? (
           <>
             <button
               type="button"

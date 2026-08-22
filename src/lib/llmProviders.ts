@@ -6,8 +6,6 @@ export interface LlmProviderPreset {
   /** Endpoint root; `/chat/completions` and `/models` hang off it. */
   baseUrl: string;
   defaultModel: string;
-  /** Runs on this machine — no key needed, and the key field can stay empty. */
-  local?: boolean;
 }
 
 /**
@@ -78,14 +76,12 @@ export const LLM_PROVIDER_PRESETS: LlmProviderPreset[] = [
     label: "Ollama (local)",
     baseUrl: "http://localhost:11434/v1",
     defaultModel: "llama3.1",
-    local: true,
   },
   {
     id: "lmstudio",
     label: "LM Studio (local)",
     baseUrl: "http://localhost:1234/v1",
     defaultModel: "",
-    local: true,
   },
   {
     id: "custom",
@@ -114,16 +110,18 @@ export function isLocalEndpoint(apiBaseUrl: string): boolean {
   );
 }
 
+/** True when the LLM can be reached at all — a key, or a server on this machine. */
+export function canCallLlm(config: { apiKey: string; apiBaseUrl: string }): boolean {
+  return config.apiKey.trim() !== "" || isLocalEndpoint(config.apiBaseUrl);
+}
+
 /** True when a summary would actually run with this configuration. */
 export function summaryWouldRun(config: {
   includeSummary: boolean;
   apiKey: string;
   apiBaseUrl: string;
 }): boolean {
-  return (
-    config.includeSummary &&
-    (config.apiKey.trim() !== "" || isLocalEndpoint(config.apiBaseUrl))
-  );
+  return config.includeSummary && canCallLlm(config);
 }
 
 export function presetFor(id: LlmProvider): LlmProviderPreset {

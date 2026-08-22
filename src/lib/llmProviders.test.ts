@@ -52,12 +52,6 @@ describe("LLM_PROVIDER_PRESETS", () => {
     }
   });
 
-  it("marks only the localhost providers as local", () => {
-    for (const p of LLM_PROVIDER_PRESETS) {
-      expect(p.local === true, p.id).toBe(p.baseUrl.includes("localhost"));
-    }
-  });
-
   it("falls back to the first preset for an unknown id", () => {
     expect(presetFor("nope" as never)).toBe(LLM_PROVIDER_PRESETS[0]);
   });
