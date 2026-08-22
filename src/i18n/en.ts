@@ -48,7 +48,6 @@ export const en = {
   "toolbar.deleteAudioState": "Delete audio — {state}",
   "toolbar.settings": "Settings",
   "toolbar.settingsTitle": "Settings — Ctrl+,",
-  "toolbar.about": "About",
   "toolbar.appMode": "App mode",
 
   "queue.empty":
@@ -111,7 +110,6 @@ export const en = {
   "podcast.removeRecentAria": "Remove {name}",
   "podcast.submit": "Add episodes",
 
-  "about.title": "About VoxMD",
   "about.tagline":
     "Transcribe audio to Markdown with local Whisper and your LLM API. Settings and keys stay on this device.",
   "about.version": "Version",
@@ -152,7 +150,6 @@ export const en = {
   "settings.sections": "Settings sections",
   "settings.tabLlm": "Summary",
   "settings.tabWhisper": "Transcription",
-  "settings.tabSpeakers": "Speakers",
   "settings.tabDictation": "Dictation",
   "settings.tabAppearance": "Appearance",
   "settings.reset": "Reset defaults",
@@ -188,7 +185,6 @@ export const en = {
     "Local speech-to-text on this device. Produces the transcript section of the Markdown output.",
   "settings.whisperModel": "Whisper model",
   "settings.customPath": "Custom path…",
-  "settings.clearCache": "Clear cache",
   "settings.clearingCache": "Deleting…",
   "settings.clearCacheTitle": "Delete all downloaded Whisper models from the local cache",
   "settings.modelPathPlaceholder": "/absolute/path/to/model.bin",
@@ -200,7 +196,6 @@ export const en = {
   "settings.transcriptionLanguage": "Transcription language",
   "settings.transcriptionLanguageHint":
     "Spoken language in the audio. Auto-detect works well; ISO is faster when you know it.",
-  "settings.gpu": "GPU",
   "settings.useGpu": "Use GPU (Vulkan)",
   "settings.gpuAvailable": "Available",
   "settings.gpuCpuOnly": "CPU only",
@@ -208,17 +203,13 @@ export const en = {
   "settings.gpuBadgeTitle": "Whether this build can use Vulkan and the loader is present",
   "settings.gpuHint":
     "Speeds up Whisper when Vulkan works on this machine. If unavailable, transcription still runs on CPU.",
-  "settings.whileProcessing": "While processing",
   "settings.preventSleep": "Prevent the computer from sleeping",
   "settings.preventSleepHint":
     "Holds an idle-inhibit lock for the duration of a batch. Windows may still sleep on battery (Modern Standby). A failure is logged and the batch continues.",
 
   "settings.speakerLabels": "Label speakers in the transcript",
-  "settings.speakerCount": "Exact speaker count (0 = auto)",
   "settings.speakersHint":
     "On first use this downloads two ONNX models plus the ONNX Runtime library into ~/.cache/voxmd/diarize/ — about 40 MB on Linux, more on Windows and macOS. Shipping the runtime separately keeps it out of the app for everyone who leaves this off.",
-  "settings.speakersHint2":
-    "Each transcript line becomes [HH:MM:SS] **Speaker N:** … 0 lets clustering decide (at most {max} speakers); set 2 for a two-person interview. If diarization fails, the unlabeled transcript is kept. Expect noticeably longer processing per file.",
 
   "settings.dictationIntro":
     "Live microphone transcription uses its own Whisper model so the batch queue can keep a larger one. Dictation and a running batch cannot overlap.",
@@ -233,8 +224,6 @@ export const en = {
   "settings.uiLanguageSystem": "System",
   "settings.uiLanguageHint":
     "Language of this app’s own labels and messages. Messages coming from the transcription backend stay English.",
-  "settings.shortcuts":
-    "Shortcuts: F5 start / record, Esc cancel / stop, Ctrl+O files, Ctrl+, settings, Ctrl+1 queue, Ctrl+2 dictation. Ignored while typing in a field.",
 
   "lang.isoCode": "ISO code",
   "lang.systemLanguage": "System language",
@@ -272,6 +261,52 @@ export const en = {
   "crash.reload": "Reload",
   "msg.filesAddedIgnored": "{added} file(s) added, {ignored} unsupported item(s) ignored.",
   "msg.noSupportedFiles": "No supported audio files in the drop.",
+  "settings.search": "Search settings…",
+  "settings.searchClear": "Clear search",
+  "settings.resultsOne": "1 match",
+  "settings.resultsMany": "{count} matches",
+  "settings.noResults": "Nothing found. Try “language”, “GPU”, “key” or “speakers”.",
+  "settings.unsavedNone": "No changes.",
+  "settings.unsavedOne": "1 unsaved change",
+  "settings.unsavedMany": "{count} unsaved changes",
+  "settings.unsavedDot": "Unsaved change",
+  "settings.justSaved": "Saved.",
+  "settings.tabAbout": "About",
+  "settings.speakerCountLabel": "How many people are speaking?",
+  "settings.speakerAuto": "Automatic",
+  "settings.speakerMore": "5+",
+  "settings.speakerAutoNote": "VoxMD estimates the number itself — good for rounds with a changing cast.",
+  "settings.speakerFixedNote": "A fixed number usually beats the automatic estimate.",
+  "settings.onThisMachine": "On this machine",
+  "settings.modelCacheLine": "Downloaded models",
+  "settings.modelCacheNone": "Nothing downloaded yet",
+  "settings.modelCacheSome": "{count} cached",
+  "settings.freeSpace": "Free up space",
+  "settings.speakerSection": "Speakers",
+  "search.themeHint": "Light, dark, or follow the system.",
+  "search.uiLanguageHint": "Language of the labels in this window.",
+  "search.whisperModelHint": "Larger is more accurate but slower.",
+  "search.transcriptionLanguageHint": "Language spoken in the audio.",
+  "search.speakersHint": "Marks who is speaking in the transcript.",
+  "search.speakerCount": "Number of speakers",
+  "search.speakerCountHint": "A fixed number, or let it be estimated.",
+  "search.gpuHint": "Speeds up long files noticeably.",
+  "search.preventSleepHint": "Keeps the machine awake while processing.",
+  "search.modelCache": "Downloaded models",
+  "search.modelCacheHint": "Delete cached Whisper models to free disk space.",
+  "search.providerHint": "Which service writes the summary.",
+  "search.apiKeyHint": "Stays on this device. Sent only to the chosen service.",
+  "search.modelHint": "Which model of the service is used.",
+  "search.baseUrlHint": "Set by the service. Free text only for Custom.",
+  "search.summaryLanguageHint": "Language of the written text — not the audio.",
+  "search.dictationModelHint": "Separate model for the live transcript.",
+  "settings.shortcutsTitle": "Keyboard shortcuts",
+  "shortcut.start": "Start / record",
+  "shortcut.cancel": "Cancel / stop",
+  "shortcut.files": "Add files",
+  "shortcut.settings": "Settings",
+  "shortcut.queue": "Queue",
+  "shortcut.dictation": "Dictation",
   "msg.batchComplete": "Batch complete.",
 } as const;
 

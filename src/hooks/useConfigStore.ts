@@ -7,6 +7,8 @@ import type { AppConfig, QueueItem } from "../types";
 
 export interface ConfigStore {
   config: AppConfig;
+  /** What is on disk. Differs from `config` exactly while edits are unsaved. */
+  saved: AppConfig;
   /** Live edit, not persisted until `save` (or a `persist` call) runs. */
   setConfig: (next: AppConfig | ((prev: AppConfig) => AppConfig)) => void;
   /** Write to disk. Accepts an updater so callers running after an `await`
@@ -22,6 +24,7 @@ export interface ConfigStore {
 
 export function useConfigStore(): ConfigStore {
   const [config, setConfigState] = useState<AppConfig>(defaultConfig);
+  const [saved, setSaved] = useState<AppConfig>(defaultConfig);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState("");
 
@@ -48,6 +51,7 @@ export function useConfigStore(): ConfigStore {
         const merged = mergeConfig(saved ?? undefined);
         currentRef.current = merged;
         savedRef.current = merged;
+        setSaved(merged);
         setConfigState(merged);
       } catch (e) {
         // Surfaced rather than silently reverting to defaults, since the next
@@ -63,6 +67,7 @@ export function useConfigStore(): ConfigStore {
     const next = typeof update === "function" ? update(currentRef.current) : update;
     currentRef.current = next;
     savedRef.current = next;
+    setSaved(next);
     setConfigState(next);
     const store =
       storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
@@ -88,5 +93,5 @@ export function useConfigStore(): ConfigStore {
     await store.save();
   }, []);
 
-  return { config, setConfig, persist, revert, loadQueue, saveQueue, ready, loadError };
+  return { config, saved, setConfig, persist, revert, loadQueue, saveQueue, ready, loadError };
 }

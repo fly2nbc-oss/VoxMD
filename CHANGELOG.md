@@ -25,7 +25,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ### Changed
 
-- **Settings no longer scrolls.** The drawer is now up to 1024 px wide with a tab rail (Summary / Transcription / Speakers / Dictation / Appearance) and a two-column field grid, instead of four sections stacked in a 440 px column.
+- **Settings reworked around finding things.** The drawer is up to 1024 px wide with a search field that matches translated labels *and* technical keywords ("vulkan" finds the GPU row, "schlussel" finds "Schlüssel"), a rail of four sections — Appearance, Transcription, Summary, Dictation — each showing its current value, a dot on sections carrying an unsaved edit, and a count in the footer. Speakers moved into Transcription; nothing hides behind an "Advanced" disclosure any more. Replaces four sections stacked in a 440 px column.
+- **About lives in Settings.** The separate About dialog and its toolbar button are gone; it is the last rail entry, below a divider.
+- Keyboard shortcuts are a table instead of one run-on sentence.
 - Whisper loop pulls from a process-wide deque instead of a fixed `Vec`, so the batch can grow. Channel capacity remains 1.
 - Linux CI/release images install cmake, ALSA, D-Bus, OpenSSL headers and g++ (needed by `pyannote-rs` / `cpal` / `keepawake`).
 - `ort` is pinned to `=2.0.0-rc.10` so `pyannote-rs` 0.3.4 compiles (later rcs pull a second `ndarray` and break Send/Sync).

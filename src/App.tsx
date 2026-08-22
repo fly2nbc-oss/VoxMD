@@ -1,10 +1,8 @@
-import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileAudio2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AboutDialog } from "./components/AboutDialog";
 import { AppToolbar } from "./components/AppToolbar";
 import { DictationView } from "./components/DictationView";
 import { ErrorPanel } from "./components/ErrorPanel";
@@ -38,6 +36,7 @@ export default function App() {
   const [themeMode, setThemeMode] = useTheme();
   const {
     config,
+    saved: savedConfig,
     setConfig,
     persist,
     revert,
@@ -77,8 +76,6 @@ export default function App() {
   const [queueHydrated, setQueueHydrated] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [aboutVersion, setAboutVersion] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">(
     "idle",
   );
@@ -225,12 +222,6 @@ export default function App() {
     };
   }, [settingsOpen, setStatusMsg]);
 
-  useEffect(() => {
-    if (!aboutOpen) return;
-    void getVersion()
-      .then(setAboutVersion)
-      .catch(() => setAboutVersion("—"));
-  }, [aboutOpen]);
 
   /** Append new items (deduplicated by id) and queue rows for them.
    *
@@ -574,7 +565,7 @@ export default function App() {
     }
   };
 
-  const dialogOpen = settingsOpen || aboutOpen || podcastOpen;
+  const dialogOpen = settingsOpen || podcastOpen;
 
   useHotkeys(
     {
@@ -635,7 +626,6 @@ export default function App() {
             }))
           }
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenAbout={() => setAboutOpen(true)}
         />
 
         {dragActive && mode === "queue" ? (
@@ -705,6 +695,7 @@ export default function App() {
         {settingsOpen ? (
           <SettingsDrawer
             config={config}
+            savedConfig={savedConfig}
             onConfigChange={setConfig}
             storeReady={storeReady}
             saveState={saveState}
@@ -734,12 +725,6 @@ export default function App() {
           />
         ) : null}
 
-        {aboutOpen ? (
-          <AboutDialog
-            version={aboutVersion}
-            onClose={() => setAboutOpen(false)}
-          />
-        ) : null}
       </div>
     </I18nContext.Provider>
   );

@@ -42,7 +42,6 @@ export const es: Messages = {
   "toolbar.deleteAudioState": "Eliminar audio — {state}",
   "toolbar.settings": "Ajustes",
   "toolbar.settingsTitle": "Ajustes — Ctrl+,",
-  "toolbar.about": "Acerca de",
   "toolbar.appMode": "Modo de la aplicación",
 
   "queue.empty":
@@ -105,7 +104,6 @@ export const es: Messages = {
   "podcast.removeRecentAria": "Quitar {name}",
   "podcast.submit": "Añadir episodios",
 
-  "about.title": "Acerca de VoxMD",
   "about.tagline":
     "Transcribe audio a Markdown con Whisper en local y tu API de LLM. Los ajustes y las claves permanecen en este dispositivo.",
   "about.version": "Versión",
@@ -147,7 +145,6 @@ export const es: Messages = {
   "settings.sections": "Secciones de ajustes",
   "settings.tabLlm": "Resumen",
   "settings.tabWhisper": "Transcripción",
-  "settings.tabSpeakers": "Hablantes",
   "settings.tabDictation": "Dictado",
   "settings.tabAppearance": "Apariencia",
   "settings.reset": "Valores predeterminados",
@@ -186,7 +183,6 @@ export const es: Messages = {
     "Reconocimiento de voz local en este dispositivo. Genera la sección de transcripción de la salida Markdown.",
   "settings.whisperModel": "Modelo Whisper",
   "settings.customPath": "Ruta personalizada…",
-  "settings.clearCache": "Vaciar caché",
   "settings.clearingCache": "Eliminando…",
   "settings.clearCacheTitle": "Eliminar de la caché local todos los modelos Whisper descargados",
   "settings.modelPathPlaceholder": "/ruta/absoluta/al/modelo.bin",
@@ -198,7 +194,6 @@ export const es: Messages = {
   "settings.transcriptionLanguage": "Idioma de la transcripción",
   "settings.transcriptionLanguageHint":
     "Idioma hablado en el audio. La detección automática funciona bien; el ISO es más rápido si lo conoces.",
-  "settings.gpu": "GPU",
   "settings.useGpu": "Usar la GPU (Vulkan)",
   "settings.gpuAvailable": "Disponible",
   "settings.gpuCpuOnly": "Solo CPU",
@@ -206,17 +201,13 @@ export const es: Messages = {
   "settings.gpuBadgeTitle": "Si esta compilación puede usar Vulkan y el loader está presente",
   "settings.gpuHint":
     "Acelera Whisper cuando Vulkan funciona en esta máquina. Si no, la transcripción se ejecuta en la CPU.",
-  "settings.whileProcessing": "Durante el procesamiento",
   "settings.preventSleep": "Impedir que el equipo entre en suspensión",
   "settings.preventSleepHint":
     "Mantiene un bloqueo de inactividad mientras dura el lote. Windows puede suspenderse igualmente con batería (Modern Standby). Un fallo se registra y el lote continúa.",
 
   "settings.speakerLabels": "Etiquetar hablantes en la transcripción",
-  "settings.speakerCount": "Número exacto de hablantes (0 = automático)",
   "settings.speakersHint":
     "En el primer uso se descargan dos modelos ONNX y la biblioteca ONNX Runtime en ~/.cache/voxmd/diarize/ — unos 40 MB en Linux, más en Windows y macOS. Distribuir el runtime aparte lo mantiene fuera de la aplicación mientras esta opción siga desactivada.",
-  "settings.speakersHint2":
-    "Cada línea pasa a ser [HH:MM:SS] **Speaker N:** … 0 deja que decida el clustering (como máximo {max} hablantes); pon 2 para una entrevista de dos personas. Si la separación falla, se conserva la transcripción sin etiquetas. El procesamiento tarda bastante más.",
 
   "settings.dictationIntro":
     "La transcripción en directo usa su propio modelo Whisper para que la cola pueda mantener uno más grande. El dictado y un lote en curso son excluyentes.",
@@ -231,8 +222,6 @@ export const es: Messages = {
   "settings.uiLanguageSystem": "Sistema",
   "settings.uiLanguageHint":
     "Idioma de las etiquetas y mensajes de esta aplicación. Los mensajes del motor de transcripción permanecen en inglés.",
-  "settings.shortcuts":
-    "Atajos: F5 iniciar / grabar, Esc cancelar / detener, Ctrl+O archivos, Ctrl+, ajustes, Ctrl+1 cola, Ctrl+2 dictado. Se ignoran al escribir en un campo.",
 
   "lang.isoCode": "Código ISO",
   "lang.systemLanguage": "Idioma del sistema",
@@ -271,5 +260,51 @@ export const es: Messages = {
   "crash.reload": "Recargar",
   "msg.filesAddedIgnored": "{added} archivo(s) añadido(s), {ignored} elemento(s) no compatibles ignorados.",
   "msg.noSupportedFiles": "No hay archivos de audio compatibles en lo soltado.",
+  "settings.search": "Buscar un ajuste…",
+  "settings.searchClear": "Vaciar la búsqueda",
+  "settings.resultsOne": "1 resultado",
+  "settings.resultsMany": "{count} resultados",
+  "settings.noResults": "Nada encontrado. Prueba con «idioma», «GPU», «clave» o «hablantes».",
+  "settings.unsavedNone": "Sin cambios.",
+  "settings.unsavedOne": "1 cambio sin guardar",
+  "settings.unsavedMany": "{count} cambios sin guardar",
+  "settings.unsavedDot": "Cambio sin guardar",
+  "settings.justSaved": "Guardado.",
+  "settings.tabAbout": "Acerca de",
+  "settings.speakerCountLabel": "¿Cuántas personas hablan?",
+  "settings.speakerAuto": "Automático",
+  "settings.speakerMore": "5+",
+  "settings.speakerAutoNote": "VoxMD estima el número por su cuenta — útil cuando la composición cambia.",
+  "settings.speakerFixedNote": "Un número fijo suele acertar más que la estimación automática.",
+  "settings.onThisMachine": "En este equipo",
+  "settings.modelCacheLine": "Modelos descargados",
+  "settings.modelCacheNone": "Todavía no hay descargas",
+  "settings.modelCacheSome": "{count} en caché",
+  "settings.freeSpace": "Liberar espacio",
+  "settings.speakerSection": "Hablantes",
+  "search.themeHint": "Claro, oscuro o según el sistema.",
+  "search.uiLanguageHint": "Idioma de las etiquetas de esta ventana.",
+  "search.whisperModelHint": "Más grande es más preciso pero más lento.",
+  "search.transcriptionLanguageHint": "Idioma hablado en el audio.",
+  "search.speakersHint": "Marca en la transcripción quién habla.",
+  "search.speakerCount": "Número de hablantes",
+  "search.speakerCountHint": "Número fijo o dejar que se estime.",
+  "search.gpuHint": "Acelera notablemente los archivos largos.",
+  "search.preventSleepHint": "Mantiene el equipo despierto mientras procesa.",
+  "search.modelCache": "Modelos descargados",
+  "search.modelCacheHint": "Eliminar los modelos Whisper en caché para liberar espacio.",
+  "search.providerHint": "Qué servicio redacta el resumen.",
+  "search.apiKeyHint": "Permanece en este dispositivo. Solo se envía al servicio elegido.",
+  "search.modelHint": "Qué modelo del servicio se usa.",
+  "search.baseUrlHint": "La fija el servicio. Libre solo en «Personalizado».",
+  "search.summaryLanguageHint": "Idioma del texto escrito — no el del audio.",
+  "search.dictationModelHint": "Modelo propio para la transcripción en directo.",
+  "settings.shortcutsTitle": "Atajos de teclado",
+  "shortcut.start": "Iniciar / grabar",
+  "shortcut.cancel": "Cancelar / detener",
+  "shortcut.files": "Añadir archivos",
+  "shortcut.settings": "Ajustes",
+  "shortcut.queue": "Cola",
+  "shortcut.dictation": "Dictado",
   "msg.batchComplete": "Lote completado.",
 };

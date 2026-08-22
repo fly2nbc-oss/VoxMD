@@ -520,19 +520,64 @@ select.input {
   gap: var(--space-lg);
 }
 
+/* Rail: search on top, then the sections. Each row carries its current value,
+   so the configuration is readable without opening every tab. */
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-right: 1px solid var(--line-soft);
+  padding-right: var(--space-md);
+  min-height: 0;
+}
+
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.settings-search > svg {
+  position: absolute;
+  left: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.settings-search .input {
+  min-height: 34px;
+  padding-left: 30px;
+  padding-right: 28px;
+  font-size: 12.5px;
+}
+
+.settings-search .icon-btn {
+  position: absolute;
+  right: 3px;
+  min-width: 24px;
+  min-height: 24px;
+}
+
 .settings-tabs {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border-right: 1px solid var(--line-soft);
-  padding-right: var(--space-md);
+  overflow: auto;
+  min-height: 0;
+}
+
+.settings-tabs-gap {
+  margin-top: auto;
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--line-soft);
 }
 
 .settings-tab {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 8px;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 7px 9px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -541,21 +586,269 @@ select.input {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  min-height: 0;
+}
+
+.settings-tab > svg {
+  justify-self: center;
+}
+
+.settings-tab-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.settings-tab-label {
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+.settings-tab-value {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.settings-tab-dot-slot {
+  width: 6px;
 }
 
 .settings-tab:hover {
-  background: var(--surface-alt);
+  background: var(--row-hover);
 }
 
 .settings-tab.is-active {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.settings-tab.is-active .settings-tab-label {
   font-weight: 600;
 }
 
 .settings-tab:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* Search results: the row says where the setting lives, clicking goes there. */
+.search-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  min-height: 0;
+}
+
+.search-hit:hover {
+  background: var(--row-hover);
+  border-color: var(--line);
+}
+
+.search-hit-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+
+.search-hit-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.search-hit-section {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.search-hit .field-hint {
+  margin: 0;
+}
+
+/* Outline, not a border or padding change: it paints outside the box, so a
+   search jump cannot shift the form under the pointer. */
+.is-found {
+  outline: 2px solid var(--accent);
+  outline-offset: 7px;
+  border-radius: 3px;
+}
+
+.settings-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--line-soft);
+}
+
+.option-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.option-card:hover {
+  background: var(--row-hover);
+}
+
+.option-card > input {
+  margin: 2px 0 0;
+  flex-shrink: 0;
+}
+
+.option-card > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.option-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 12.5px;
+}
+
+.option-card .field-hint,
+.cache-row .field-hint {
+  margin: 0;
+}
+
+.cache-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+}
+
+.cache-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.segmented {
+  display: flex;
+  gap: 6px;
+}
+
+.segmented-wrap {
+  flex-wrap: wrap;
+}
+
+.segmented-btn {
+  flex: 1;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.segmented-wrap .segmented-btn {
+  flex: 0 0 auto;
+}
+
+.segmented-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.segmented-btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px var(--space-xl);
+  max-width: 620px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.shortcut-row kbd {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.about-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  text-align: center;
+  margin: auto 0;
+  padding: var(--space-xl) 0;
+}
+
+.settings-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-dirty.is-dirty {
+  color: var(--text);
 }
 
 .settings-panel {

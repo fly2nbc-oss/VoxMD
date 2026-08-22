@@ -42,7 +42,6 @@ export const fr: Messages = {
   "toolbar.deleteAudioState": "Supprimer l’audio — {state}",
   "toolbar.settings": "Paramètres",
   "toolbar.settingsTitle": "Paramètres — Ctrl+,",
-  "toolbar.about": "À propos",
   "toolbar.appMode": "Mode de l’application",
 
   "queue.empty":
@@ -105,7 +104,6 @@ export const fr: Messages = {
   "podcast.removeRecentAria": "Retirer {name}",
   "podcast.submit": "Ajouter les épisodes",
 
-  "about.title": "À propos de VoxMD",
   "about.tagline":
     "Transcrivez l’audio en Markdown avec Whisper en local et votre API LLM. Les paramètres et les clés restent sur cet appareil.",
   "about.version": "Version",
@@ -148,7 +146,6 @@ export const fr: Messages = {
   "settings.sections": "Sections des paramètres",
   "settings.tabLlm": "Résumé",
   "settings.tabWhisper": "Transcription",
-  "settings.tabSpeakers": "Locuteurs",
   "settings.tabDictation": "Dictée",
   "settings.tabAppearance": "Apparence",
   "settings.reset": "Valeurs par défaut",
@@ -187,7 +184,6 @@ export const fr: Messages = {
     "Reconnaissance vocale locale sur cet appareil. Produit la section transcription de la sortie Markdown.",
   "settings.whisperModel": "Modèle Whisper",
   "settings.customPath": "Chemin personnalisé…",
-  "settings.clearCache": "Vider le cache",
   "settings.clearingCache": "Suppression…",
   "settings.clearCacheTitle": "Supprimer tous les modèles Whisper téléchargés du cache local",
   "settings.modelPathPlaceholder": "/chemin/absolu/vers/modele.bin",
@@ -199,7 +195,6 @@ export const fr: Messages = {
   "settings.transcriptionLanguage": "Langue de la transcription",
   "settings.transcriptionLanguageHint":
     "Langue parlée dans l’audio. La détection automatique fonctionne bien ; l’ISO est plus rapide si vous la connaissez.",
-  "settings.gpu": "GPU",
   "settings.useGpu": "Utiliser le GPU (Vulkan)",
   "settings.gpuAvailable": "Disponible",
   "settings.gpuCpuOnly": "CPU uniquement",
@@ -207,17 +202,13 @@ export const fr: Messages = {
   "settings.gpuBadgeTitle": "Si cette version peut utiliser Vulkan et si le loader est présent",
   "settings.gpuHint":
     "Accélère Whisper quand Vulkan fonctionne sur cette machine. Sinon, la transcription s’exécute sur le CPU.",
-  "settings.whileProcessing": "Pendant le traitement",
   "settings.preventSleep": "Empêcher la mise en veille de l’ordinateur",
   "settings.preventSleepHint":
     "Maintient un verrou anti-veille pendant toute la durée du lot. Windows peut tout de même se mettre en veille sur batterie (Modern Standby). Un échec est journalisé et le lot continue.",
 
   "settings.speakerLabels": "Identifier les locuteurs dans la transcription",
-  "settings.speakerCount": "Nombre exact de locuteurs (0 = automatique)",
   "settings.speakersHint":
     "À la première utilisation, deux modèles ONNX et la bibliothèque ONNX Runtime sont téléchargés dans ~/.cache/voxmd/diarize/ — environ 40 Mo sous Linux, davantage sous Windows et macOS. Livrer le runtime séparément le garde hors de l’application tant que cette option reste désactivée.",
-  "settings.speakersHint2":
-    "Chaque ligne devient [HH:MM:SS] **Speaker N:** … 0 laisse le clustering décider (au plus {max} locuteurs) ; mettez 2 pour un entretien à deux. En cas d’échec, la transcription reste sans étiquettes. Le traitement est nettement plus long.",
 
   "settings.dictationIntro":
     "La transcription en direct utilise son propre modèle Whisper afin que la file puisse en garder un plus grand. Dictée et lot en cours sont exclusifs.",
@@ -232,8 +223,6 @@ export const fr: Messages = {
   "settings.uiLanguageSystem": "Système",
   "settings.uiLanguageHint":
     "Langue des libellés et messages de cette application. Les messages venant du moteur de transcription restent en anglais.",
-  "settings.shortcuts":
-    "Raccourcis : F5 démarrer / enregistrer, Échap annuler / arrêter, Ctrl+O fichiers, Ctrl+, paramètres, Ctrl+1 file, Ctrl+2 dictée. Ignorés pendant la saisie.",
 
   "lang.isoCode": "Code ISO",
   "lang.systemLanguage": "Langue du système",
@@ -272,5 +261,51 @@ export const fr: Messages = {
   "crash.reload": "Recharger",
   "msg.filesAddedIgnored": "{added} fichier(s) ajouté(s), {ignored} élément(s) non pris en charge ignoré(s).",
   "msg.noSupportedFiles": "Aucun fichier audio pris en charge dans le dépôt.",
+  "settings.search": "Rechercher un paramètre…",
+  "settings.searchClear": "Effacer la recherche",
+  "settings.resultsOne": "1 résultat",
+  "settings.resultsMany": "{count} résultats",
+  "settings.noResults": "Rien trouvé. Essayez « langue », « GPU », « clé » ou « locuteurs ».",
+  "settings.unsavedNone": "Aucune modification.",
+  "settings.unsavedOne": "1 modification non enregistrée",
+  "settings.unsavedMany": "{count} modifications non enregistrées",
+  "settings.unsavedDot": "Modification non enregistrée",
+  "settings.justSaved": "Enregistré.",
+  "settings.tabAbout": "À propos",
+  "settings.speakerCountLabel": "Combien de personnes parlent ?",
+  "settings.speakerAuto": "Automatique",
+  "settings.speakerMore": "5+",
+  "settings.speakerAutoNote": "VoxMD estime le nombre lui-même — pratique quand la composition change.",
+  "settings.speakerFixedNote": "Un nombre fixe vaut généralement mieux que l’estimation automatique.",
+  "settings.onThisMachine": "Sur cette machine",
+  "settings.modelCacheLine": "Modèles téléchargés",
+  "settings.modelCacheNone": "Rien de téléchargé",
+  "settings.modelCacheSome": "{count} en cache",
+  "settings.freeSpace": "Libérer de l’espace",
+  "settings.speakerSection": "Locuteurs",
+  "search.themeHint": "Clair, sombre ou selon le système.",
+  "search.uiLanguageHint": "Langue des libellés de cette fenêtre.",
+  "search.whisperModelHint": "Plus grand est plus précis mais plus lent.",
+  "search.transcriptionLanguageHint": "Langue parlée dans l’audio.",
+  "search.speakersHint": "Indique qui parle dans la transcription.",
+  "search.speakerCount": "Nombre de locuteurs",
+  "search.speakerCountHint": "Un nombre fixe, ou laisser estimer.",
+  "search.gpuHint": "Accélère nettement les fichiers longs.",
+  "search.preventSleepHint": "Garde la machine éveillée pendant le traitement.",
+  "search.modelCache": "Modèles téléchargés",
+  "search.modelCacheHint": "Supprimer les modèles Whisper en cache pour libérer de l’espace.",
+  "search.providerHint": "Quel service rédige le résumé.",
+  "search.apiKeyHint": "Reste sur cet appareil. Envoyée au seul service choisi.",
+  "search.modelHint": "Quel modèle du service est utilisé.",
+  "search.baseUrlHint": "Défini par le service. Libre uniquement en Personnalisé.",
+  "search.summaryLanguageHint": "Langue du texte écrit — pas celle de l’audio.",
+  "search.dictationModelHint": "Modèle distinct pour la transcription en direct.",
+  "settings.shortcutsTitle": "Raccourcis clavier",
+  "shortcut.start": "Démarrer / enregistrer",
+  "shortcut.cancel": "Annuler / arrêter",
+  "shortcut.files": "Ajouter des fichiers",
+  "shortcut.settings": "Paramètres",
+  "shortcut.queue": "File d’attente",
+  "shortcut.dictation": "Dictée",
   "msg.batchComplete": "Lot terminé.",
 };

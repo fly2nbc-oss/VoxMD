@@ -42,7 +42,6 @@ export const de: Messages = {
   "toolbar.deleteAudioState": "Audio löschen — {state}",
   "toolbar.settings": "Einstellungen",
   "toolbar.settingsTitle": "Einstellungen — Strg+,",
-  "toolbar.about": "Über",
   "toolbar.appMode": "Anwendungsmodus",
 
   "queue.empty":
@@ -105,7 +104,6 @@ export const de: Messages = {
   "podcast.removeRecentAria": "{name} entfernen",
   "podcast.submit": "Episoden hinzufügen",
 
-  "about.title": "Über VoxMD",
   "about.tagline":
     "Audio mit lokalem Whisper und deiner LLM-API nach Markdown transkribieren. Einstellungen und Schlüssel bleiben auf diesem Gerät.",
   "about.version": "Version",
@@ -147,7 +145,6 @@ export const de: Messages = {
   "settings.sections": "Einstellungsbereiche",
   "settings.tabLlm": "Zusammenfassung",
   "settings.tabWhisper": "Transkription",
-  "settings.tabSpeakers": "Sprecher",
   "settings.tabDictation": "Diktat",
   "settings.tabAppearance": "Darstellung",
   "settings.reset": "Standardwerte",
@@ -186,7 +183,6 @@ export const de: Messages = {
     "Lokale Spracherkennung auf diesem Gerät. Erzeugt den Transkript-Abschnitt der Markdown-Ausgabe.",
   "settings.whisperModel": "Whisper-Modell",
   "settings.customPath": "Eigener Pfad…",
-  "settings.clearCache": "Cache leeren",
   "settings.clearingCache": "Wird gelöscht…",
   "settings.clearCacheTitle": "Alle heruntergeladenen Whisper-Modelle aus dem Cache löschen",
   "settings.modelPathPlaceholder": "/absoluter/pfad/zum/modell.bin",
@@ -198,7 +194,6 @@ export const de: Messages = {
   "settings.transcriptionLanguage": "Sprache der Transkription",
   "settings.transcriptionLanguageHint":
     "Gesprochene Sprache im Audio. Automatische Erkennung funktioniert gut; ISO ist schneller, wenn die Sprache bekannt ist.",
-  "settings.gpu": "GPU",
   "settings.useGpu": "GPU verwenden (Vulkan)",
   "settings.gpuAvailable": "Verfügbar",
   "settings.gpuCpuOnly": "Nur CPU",
@@ -206,17 +201,13 @@ export const de: Messages = {
   "settings.gpuBadgeTitle": "Ob dieser Build Vulkan nutzen kann und der Loader vorhanden ist",
   "settings.gpuHint":
     "Beschleunigt Whisper, wenn Vulkan auf diesem Rechner funktioniert. Andernfalls läuft die Transkription auf der CPU.",
-  "settings.whileProcessing": "Während der Verarbeitung",
   "settings.preventSleep": "Ruhezustand des Rechners verhindern",
   "settings.preventSleepHint":
     "Hält für die Dauer eines Stapels eine Leerlaufsperre. Windows kann im Akkubetrieb dennoch schlafen (Modern Standby). Ein Fehlschlag wird protokolliert, der Stapel läuft weiter.",
 
   "settings.speakerLabels": "Sprecher im Transkript kennzeichnen",
-  "settings.speakerCount": "Genaue Sprecheranzahl (0 = automatisch)",
   "settings.speakersHint":
     "Bei der ersten Nutzung werden zwei ONNX-Modelle und die ONNX-Runtime nach ~/.cache/voxmd/diarize/ geladen — rund 40 MB unter Linux, mehr unter Windows und macOS. Die Runtime separat auszuliefern hält sie aus der App heraus, solange dies ausgeschaltet bleibt.",
-  "settings.speakersHint2":
-    "Jede Transkriptzeile wird zu [HH:MM:SS] **Speaker N:** … 0 überlässt die Zahl dem Clustering (höchstens {max} Sprecher); 2 passt für ein Interview zu zweit. Schlägt die Sprechertrennung fehl, bleibt das Transkript ohne Kennzeichnung. Die Verarbeitung dauert spürbar länger.",
 
   "settings.dictationIntro":
     "Die Live-Transkription nutzt ein eigenes Whisper-Modell, damit die Warteschlange ein größeres behalten kann. Diktat und laufender Stapel schließen sich aus.",
@@ -231,8 +222,6 @@ export const de: Messages = {
   "settings.uiLanguageSystem": "System",
   "settings.uiLanguageHint":
     "Sprache der Beschriftungen und Meldungen dieser App. Meldungen aus der Transkription bleiben englisch.",
-  "settings.shortcuts":
-    "Tastenkürzel: F5 Start / Aufnahme, Esc Abbrechen / Stopp, Strg+O Dateien, Strg+, Einstellungen, Strg+1 Warteschlange, Strg+2 Diktat. In Eingabefeldern deaktiviert.",
 
   "lang.isoCode": "ISO-Code",
   "lang.systemLanguage": "Systemsprache",
@@ -271,5 +260,51 @@ export const de: Messages = {
   "crash.reload": "Neu laden",
   "msg.filesAddedIgnored": "{added} Datei(en) hinzugefügt, {ignored} nicht unterstützte Element(e) ignoriert.",
   "msg.noSupportedFiles": "Keine unterstützten Audiodateien in der Auswahl.",
+  "settings.search": "Einstellung suchen…",
+  "settings.searchClear": "Suche leeren",
+  "settings.resultsOne": "1 Treffer",
+  "settings.resultsMany": "{count} Treffer",
+  "settings.noResults": "Nichts gefunden. Versuch es mit „Sprache“, „GPU“, „Schlüssel“ oder „Sprecher“.",
+  "settings.unsavedNone": "Keine Änderungen.",
+  "settings.unsavedOne": "1 ungespeicherte Änderung",
+  "settings.unsavedMany": "{count} ungespeicherte Änderungen",
+  "settings.unsavedDot": "Ungespeicherte Änderung",
+  "settings.justSaved": "Gespeichert.",
+  "settings.tabAbout": "Über",
+  "settings.speakerCountLabel": "Wie viele Personen sprechen?",
+  "settings.speakerAuto": "Automatisch",
+  "settings.speakerMore": "5+",
+  "settings.speakerAutoNote": "VoxMD schätzt die Zahl selbst — passt für Runden mit wechselnder Besetzung.",
+  "settings.speakerFixedNote": "Eine feste Zahl trifft meist besser als die automatische Schätzung.",
+  "settings.onThisMachine": "Auf diesem Rechner",
+  "settings.modelCacheLine": "Heruntergeladene Modelle",
+  "settings.modelCacheNone": "Noch nichts geladen",
+  "settings.modelCacheSome": "{count} im Cache",
+  "settings.freeSpace": "Speicher freigeben",
+  "settings.speakerSection": "Sprecher",
+  "search.themeHint": "Hell, dunkel oder wie das System.",
+  "search.uiLanguageHint": "Sprache der Beschriftungen in diesem Fenster.",
+  "search.whisperModelHint": "Größer ist genauer, aber langsamer.",
+  "search.transcriptionLanguageHint": "Im Audio gesprochene Sprache.",
+  "search.speakersHint": "Kennzeichnet im Transkript, wer spricht.",
+  "search.speakerCount": "Anzahl der Sprecher",
+  "search.speakerCountHint": "Feste Zahl oder schätzen lassen.",
+  "search.gpuHint": "Beschleunigt lange Dateien spürbar.",
+  "search.preventSleepHint": "Hält den Rechner während der Verarbeitung wach.",
+  "search.modelCache": "Heruntergeladene Modelle",
+  "search.modelCacheHint": "Gespeicherte Whisper-Modelle löschen und Platz freigeben.",
+  "search.providerHint": "Welcher Dienst die Zusammenfassung schreibt.",
+  "search.apiKeyHint": "Bleibt auf diesem Gerät. Geht nur an den gewählten Dienst.",
+  "search.modelHint": "Welches Modell des Dienstes verwendet wird.",
+  "search.baseUrlHint": "Setzt der Dienst. Nur bei „Benutzerdefiniert“ frei.",
+  "search.summaryLanguageHint": "Sprache des geschriebenen Texts — nicht die des Audios.",
+  "search.dictationModelHint": "Eigenes Modell für die Live-Mitschrift.",
+  "settings.shortcutsTitle": "Tastenkürzel",
+  "shortcut.start": "Start / Aufnahme",
+  "shortcut.cancel": "Abbrechen / Stopp",
+  "shortcut.files": "Dateien hinzufügen",
+  "shortcut.settings": "Einstellungen",
+  "shortcut.queue": "Warteschlange",
+  "shortcut.dictation": "Diktat",
   "msg.batchComplete": "Stapel abgeschlossen.",
 };

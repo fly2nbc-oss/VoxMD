@@ -3,7 +3,6 @@ import {
   CircleStop,
   FileAudio2,
   FileText,
-  Info,
   List,
   ListX,
   Mic,
@@ -39,7 +38,6 @@ interface Props {
   onToggleMd: (key: MdToggle) => void;
   onToggleDeleteSource: () => void;
   onOpenSettings: () => void;
-  onOpenAbout: () => void;
 }
 
 export function AppToolbar({
@@ -61,7 +59,6 @@ export function AppToolbar({
   onToggleMd,
   onToggleDeleteSource,
   onOpenSettings,
-  onOpenAbout,
 }: Props) {
   const { t, tn } = useT();
   const summaryRuns = summaryWouldRun(config);
@@ -235,15 +232,6 @@ export function AppToolbar({
           onClick={onOpenSettings}
         >
           <Settings className="icon" size={22} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title={t("toolbar.about")}
-          aria-label={t("toolbar.about")}
-          onClick={onOpenAbout}
-        >
-          <Info className="icon" size={22} aria-hidden />
         </button>
       </div>
     </header>
