@@ -259,6 +259,59 @@ ausschließlich über die Defaults von `pyannote-rs`.
 - Der Einstellungshinweis erwähnt jetzt, dass Diarisierung die Verarbeitungszeit
   spürbar erhöht.
 
+## Nachtrag — Binärgröße
+
+Gemessen per Linker-Map, nicht geschätzt. Die dominierende Einzelposition war
+statisch gelinktes onnxruntime mit 18,7 MB, ausschließlich für die
+standardmäßig abgeschaltete Sprecher-Erkennung.
+
+| Anteil | vorher (CPU) | vorher (Vulkan) |
+|---|---:|---:|
+| ggml-vulkan (SPIR-V für alle Quantisierungen) | — | 36,5 MB |
+| onnxruntime (statisch) | 18,7 MB | 18,7 MB |
+| voxmd + alle Rust-Crates (eine LTO-Einheit) | 14,4 MB | 14,4 MB |
+| aws-lc-rs (rustls-Krypto) | 2,4 MB | 2,4 MB |
+| whisper.cpp / ggml-cpu | 1,7 MB | 1,7 MB |
+| **gesamt** | **39,4 MB** | **75,9 MB** |
+
+`lto = true`, `codegen-units = 1` und `strip = true` waren bereits gesetzt.
+
+**Umgesetzt:** `ort` läuft mit `load-dynamic`; `onnx_runtime.rs` lädt die
+passende Microsoft-Release beim ersten Diarisierungslauf nach
+`~/.cache/voxmd/diarize/` — also in dasselbe Verzeichnis wie die beiden
+Modelle — und prüft den veröffentlichten SHA-256.
+
+| | vorher | nachher |
+|---|---:|---:|
+| CPU-Build | 39,4 MB | **19,1 MB** (−52 %) |
+| Release-Build (Vulkan) | 75,9 MB | **55,6 MB** (−27 %) |
+
+Zusätzlich entfällt der 94-MB-Download des statischen Archivs bei jedem sauberen
+Build (`alternative-backend` → `ort-sys/disable-linking`), weil `download-binaries`
+über die `ort`-Defaults von `pyannote-rs` hereinkommt und von außen nicht
+abschaltbar ist.
+
+Preis: Wer Sprecherlabels einschaltet, lädt einmalig zusätzlich rund 7 MB
+(Linux) beziehungsweise 69 MB (Windows-Release-ZIP) und 52 MB (macOS). Die
+Windows-Asymmetrie liegt daran, dass Microsofts Release-ZIP neben der 11,8-MB-DLL
+Header und Importbibliotheken mitliefert; das PyPI-Wheel enthält dieselbe DLL bei
+12,1 MB Download, wurde aber nicht übernommen, weil es eine zweite Bezugsquelle
+wäre und hier nicht unter Windows verifizierbar war.
+
+**Nicht umgesetzt, mit Begründung:**
+
+- *ggml-vulkan trimmen (−36,5 MB):* Der Backend backt SPIR-V für alle
+  ggml-Quantisierungstypen ein. Ein Subset hieße whisper-rs-sys' CMake patchen,
+  und Nutzer mit anderen Quantisierungen verlören GPU-Unterstützung.
+  Verlustfreie Alternative wäre, CPU- und GPU-Artefakt getrennt zu
+  veröffentlichen.
+- *`panic = "abort"` (−~3,7 MB):* `pipeline.rs` verlässt sich darauf, dass ein
+  Panic aus `run_batch` entrollt — `ProcessingGuard` gibt den Slot frei,
+  `spawn_blocking` fängt ihn ab. Mit `abort` stürbe die App.
+- *aws-lc-rs → ring (−2,4 MB):* `rustls` wird von `reqwest`, `async-openai` und
+  `rustls-platform-verifier` aktiviert; Feature-Unification macht den Tausch
+  fummelig, für 3 % Ersparnis am TLS-Stack.
+
 ## Durchgeführte Prüfungen
 
 - Rust-Formatierung (`cargo fmt --check`): erfolgreich

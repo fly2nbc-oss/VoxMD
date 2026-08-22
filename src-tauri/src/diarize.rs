@@ -11,6 +11,7 @@ use crate::audio::SAMPLE_RATE;
 use crate::config::MAX_SPEAKERS_CAP;
 use crate::llm::{format_transcript, smooth_speaker_outliers, speakers_for_lines, TranscriptLine};
 use crate::model_download;
+use crate::onnx_runtime;
 
 const SEG_URL: &str =
     "https://github.com/thewh1teagle/pyannote-rs/releases/download/v0.1.0/segmentation-3.0.onnx";
@@ -53,6 +54,9 @@ fn frame_offset(window_start: usize, frame: usize) -> usize {
     window_start + FRAME_START + frame * FRAME_SIZE
 }
 
+/// Everything diarization needs at runtime — both ONNX models *and* the ONNX
+/// Runtime shared library — is downloaded into and loaded from this one
+/// directory. `cached()` is the only way to name a file in it.
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -64,22 +68,38 @@ fn cached(name: &str) -> PathBuf {
     cache_dir().join(name)
 }
 
-/// Downloads the two ONNX models if they are not already in the cache.
+/// Downloads the two ONNX models and the ONNX Runtime library if they are not
+/// already cached. `on_progress(step, of, downloaded, total)` reports per file,
+/// since each is a separate request with its own content length.
 pub async fn ensure_models(
-    on_progress: impl Fn(u64, u64) + Send + Sync + 'static,
+    on_progress: impl Fn(usize, usize, u64, u64) + Send + Sync + 'static,
 ) -> Result<(), String> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("Diarize cache: {e}"))?;
     let cb = std::sync::Arc::new(on_progress);
-    for (url, name) in [(SEG_URL, SEG_FILE), (EMB_URL, EMB_FILE)] {
+    const STEPS: usize = 3;
+
+    for (i, (url, name)) in [(SEG_URL, SEG_FILE), (EMB_URL, EMB_FILE)]
+        .into_iter()
+        .enumerate()
+    {
         let dest = cached(name);
         if dest.is_file() && dest.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             continue;
         }
         let cb = cb.clone();
-        model_download::download_file(url, &dest, move |d, t| cb(d, t)).await?;
+        model_download::download_file(url, &dest, move |d, t| cb(i + 1, STEPS, d, t)).await?;
     }
-    Ok(())
+
+    let cb = cb.clone();
+    onnx_runtime::ensure(&dir, move |d, t| cb(STEPS, STEPS, d, t)).await
+}
+
+/// True once every diarization asset is present in [`cache_dir`].
+pub fn models_cached() -> bool {
+    cached(SEG_FILE).is_file()
+        && cached(EMB_FILE).is_file()
+        && onnx_runtime::is_cached(&cache_dir())
 }
 
 fn to_i16(samples: &[f32]) -> Vec<i16> {
@@ -156,7 +176,7 @@ pub fn label_transcript(
     }
     let seg_path = cached(SEG_FILE);
     let emb_path = cached(EMB_FILE);
-    if !seg_path.is_file() || !emb_path.is_file() {
+    if !models_cached() {
         return Err("Diarization models are not cached. They download on first use.".to_string());
     }
     let (turns, _) = run_diarize(samples_f32, &seg_path, &emb_path, max_speakers, &abort)?;
@@ -178,6 +198,9 @@ fn run_diarize(
     if samples_f32.is_empty() {
         return Err("No audio for diarization.".to_string());
     }
+    // Before the first Session: `ort` panics rather than erroring when it cannot
+    // open its dylib, so the path is validated here.
+    onnx_runtime::init(&cache_dir())?;
     let samples = to_i16(samples_f32);
     let target_k = if max_speakers == 0 {
         None
@@ -888,6 +911,40 @@ mod tests {
         v
     }
 
+    /// Every runtime asset must be downloaded to *and* loaded from
+    /// [`cache_dir`]. The download side derives its destination from `cached()`
+    /// / `onnx_runtime::library_path(&cache_dir())`, the load side re-derives it
+    /// the same way — this pins the two together so a future asset cannot be
+    /// written to one directory and looked up in another.
+    #[test]
+    fn every_asset_lives_in_the_cache_dir() {
+        let dir = cache_dir();
+        assert!(
+            dir.ends_with("voxmd/diarize") || dir.ends_with("voxmd\\diarize"),
+            "{dir:?}"
+        );
+
+        let mut assets = vec![cached(SEG_FILE), cached(EMB_FILE)];
+        if let Ok(lib) = onnx_runtime::library_path(&dir) {
+            assets.push(lib);
+        }
+        assert_eq!(assets.len(), 3, "onnxruntime has no asset for this target");
+
+        for path in &assets {
+            assert_eq!(
+                path.parent(),
+                Some(dir.as_path()),
+                "{path:?} escapes {dir:?}"
+            );
+            assert!(path.file_name().is_some(), "{path:?}");
+        }
+        // Distinct names, or one download would clobber another.
+        let mut names: Vec<_> = assets.iter().filter_map(|p| p.file_name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), assets.len());
+    }
+
     #[test]
     fn f32_to_i16_clamps() {
         let out = to_i16(&[0.0, 1.0, -1.0, 2.0]);
@@ -1045,8 +1102,8 @@ mod tests {
         let seg_path = cached(SEG_FILE);
         let emb_path = cached(EMB_FILE);
         assert!(
-            seg_path.is_file() && emb_path.is_file(),
-            "diarization models missing in {}",
+            models_cached(),
+            "diarization assets missing in {}",
             cache_dir().display()
         );
         let samples = crate::audio::decode_file_to_mono_16k(&path, || false)

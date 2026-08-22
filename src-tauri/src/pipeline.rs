@@ -636,11 +636,12 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
         let mut p = payload("", "", "queued");
         p.message = Some("Preparing speaker models…".to_string());
         emit_job(app, p);
-        // ~32 MB across two files; without progress the app looks frozen on the
-        // first diarized run. Throttled to whole percent like the Whisper model.
+        // ~55 MB across three files (two ONNX models plus the ONNX Runtime
+        // library); without progress the app looks frozen on the first diarized
+        // run. Throttled to whole percent like the Whisper model.
         let app_dl = app.clone();
         let last_pct = AtomicI32::new(-1);
-        let res = diarize::ensure_models(move |dl, total| {
+        let res = diarize::ensure_models(move |step, of, dl, total| {
             let pct = (dl * 100).checked_div(total).unwrap_or(0) as i32;
             if last_pct.swap(pct, Ordering::Relaxed) == pct {
                 return;
@@ -649,7 +650,7 @@ async fn run_batch_inner(app: &AppHandle, cfg: AppConfig) -> (usize, Result<(), 
                 "model_download_progress",
                 serde_json::json!({
                     "stage": "downloading",
-                    "model": "speaker models",
+                    "model": format!("speaker models ({step}/{of})"),
                     "downloaded": dl,
                     "total": total,
                     "pct": pct,

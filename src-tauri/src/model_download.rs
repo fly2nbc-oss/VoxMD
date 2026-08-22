@@ -262,6 +262,23 @@ mod tests {
         assert_eq!(names.iter().filter(|n| *n == "turbo").count(), 1);
     }
 
+    /// A model is written to and later read from the same path, because
+    /// `resolve_model` derives both from `cache_dir()`. A future split between
+    /// the two would silently re-download on every run.
+    #[test]
+    fn download_and_load_share_one_directory() {
+        let dir = cache_dir();
+        assert!(
+            dir.ends_with("voxmd/whisper") || dir.ends_with("voxmd\\whisper"),
+            "{dir:?}"
+        );
+        for (name, file, _) in MODELS {
+            let resolved = dir.join(filename_for(name).expect("preset resolves"));
+            assert_eq!(resolved.parent(), Some(dir.as_path()));
+            assert_eq!(resolved.file_name().and_then(|f| f.to_str()), Some(*file));
+        }
+    }
+
     #[test]
     fn looks_like_model_file_accepts_bin_and_gguf() {
         assert!(looks_like_model_file(Path::new("/x/model.bin")));

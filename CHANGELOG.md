@@ -31,6 +31,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - Commands that touch the filesystem, enumerate devices or join a thread run off the main thread.
 - Speaker-model download reports progress like the Whisper model download.
 - `job_progress` carries `outputPath`, so the UI no longer recovers the written file by parsing the status text.
+- **ONNX Runtime is no longer linked into the binary.** It is downloaded on the first diarized run into `~/.cache/voxmd/diarize/`, beside the two models that use it, with its published SHA-256 verified. The CPU build drops from 39.4 MB to 19.1 MB and the released Vulkan build from 75.9 MB to 55.6 MB; nobody who leaves speaker labels off pays for the runtime any more. Enabling them costs about 40 MB of extra download on Linux (more on Windows and macOS) once.
+- Clean builds no longer fetch a 94 MB static onnxruntime archive they never link.
 
 ### Fixed
 

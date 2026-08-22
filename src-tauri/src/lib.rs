@@ -5,6 +5,7 @@ mod dictation;
 mod llm;
 mod meta;
 mod model_download;
+mod onnx_runtime;
 mod pipeline;
 mod podcast;
 mod vulkan_runtime;

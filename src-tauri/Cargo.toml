@@ -56,20 +56,29 @@ symphonia = { version = "0.6", default-features = false, features = [
 # Always-on platform backends (D-Bus inhibit on Linux, SetThreadExecutionState on Windows).
 keepawake = "0.6"
 cpal = "0.15"
-pyannote-rs = "0.3"
+# `load-dynamic` on both: onnxruntime is fetched at runtime into the diarization
+# cache instead of being linked in — it was 18.7 MB of binary for a feature that
+# is off by default. See `onnx_runtime.rs`.
+pyannote-rs = { version = "0.3", features = ["load-dynamic"] }
 # pyannote-rs 0.3.4 declares `ort = "2.0.0-rc.10"`, which also matches later
 # rcs. rc.13 pulled a second `ndarray` and SessionBuilder is not Send/Sync, so
 # the crate does not compile. Pin the version it was written against.
-# `download-binaries` and `copy-dylibs` are what actually supply onnxruntime.
-# They used to arrive only through pyannote-rs's default features, so this
-# declaration alone would not have linked; name them here so the build does not
-# depend on a transitive default.
+# `alternative-backend` maps to `ort-sys/disable-linking`, which turns ort-sys's
+# build script into a no-op. Without it `download-binaries` — still enabled
+# through pyannote-rs's ort defaults, which a dependent cannot switch off —
+# fetches the 94 MB static archive on every clean build only to not link it.
 ort = { version = "=2.0.0-rc.10", default-features = false, features = [
     "ndarray",
     "std",
-    "download-binaries",
-    "copy-dylibs",
+    "load-dynamic",
+    "alternative-backend",
 ] }
+# Unpacking the onnxruntime release asset (.tgz on Linux/macOS, .zip on Windows)
+# and checking its published hash.
+flate2 = "1"
+tar = "0.4"
+sha2 = "0.10"
+zip = { version = "6", default-features = false, features = ["deflate"] }
 # Same ndarray as pyannote-rs/ort — used by our local segmentation (upstream 0.3.4
 # feeds raw i16 to the ONNX model, so every frame looks like non-speech).
 ndarray = "0.16"

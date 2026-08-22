@@ -82,6 +82,7 @@ UI layout (not all in the settings drawer):
 | `pipeline.rs` | The two-stage pipeline, live pending deque, progress events, cancellation, `.md` assembly, optional audio deletion, prevent-sleep guard. |
 | `llm.rs` | Summary / improve / translate prompts, `list_llm_models` / `verify_api_key`, Whisper segment → labeled transcript text. |
 | `diarize.rs` | pyannote ONNX segmentation + CAM++ embeddings; own agglomerative clustering (not EmbeddingManager). Isolated so an engine swap is one file. |
+| `onnx_runtime.rs` | Fetches and verifies the ONNX Runtime shared library `ort` dlopens, into the diarization cache. |
 | `dictation.rs` | cpal capture, RMS silence detection, dedicated Whisper context, microphone list. |
 | `podcast.rs` | `QueueItem`/`EpisodeMeta` types, RSS/Atom feed parsing (`feed-rs`), lazy episode download to output folder (`download_to_file_blocking`). |
 | `audio.rs` | Symphonia decode → mono f32 @ 16 kHz (linear resample) for whisper.cpp and the diarizer. |
@@ -114,3 +115,7 @@ There is **no LLM pass over the batch transcript** — the transcript section in
 - The summary is **skipped silently when no API key is set** (`summary_enabled()`), so the app runs fully offline; validation only fails if the transcript is also disabled (empty output).
 - Whisper thread count is auto-detected (cores − 1); LLM sampling is fixed in `llm.rs` — neither is a setting anymore. Old stores with `temperature`/`maxTokens`/`whisperThreads` load fine (unknown fields ignored, dropped on next save).
 - `ort` must stay at `=2.0.0-rc.10` until `pyannote-rs` pins it; later rcs do not compile against this crate.
+- **onnxruntime is not linked in.** `ort` uses `load-dynamic`, and `onnx_runtime.rs` downloads the matching Microsoft release (pinned version + SHA-256 per target) on first diarized run. That took the CPU binary from 39.4 MB to 19.1 MB and the released Vulkan binary from 75.9 MB to 55.6 MB, for a feature that is off by default. `ort::MINOR_VERSION` is checked against the pinned release by a `const` assertion, so an `ort` bump fails the build until the assets and hashes are updated.
+- `ort` **panics** when it cannot open its dylib. Every path into a `Session` must go through `onnx_runtime::init`, which checks the file first and returns a normal error — diarization then degrades to the unlabeled transcript.
+- `alternative-backend` (→ `ort-sys/disable-linking`) is on because `download-binaries` still arrives through `pyannote-rs`'s `ort` defaults, which a dependent cannot switch off. Without it every clean build fetches a 94 MB static archive it never links.
+- **All runtime downloads land in the directory they are loaded from.** Whisper models: `~/.cache/voxmd/whisper/` (`model_download::cache_dir`). Diarization — both ONNX models *and* `libonnxruntime.so` / `onnxruntime.dll` — `~/.cache/voxmd/diarize/` (`diarize::cache_dir`, reached only via `diarize::cached` / `onnx_runtime::library_path`). Tests in both modules pin this.

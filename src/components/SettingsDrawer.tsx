@@ -477,8 +477,10 @@ export function SettingsDrawer({
             onChange={(e) => set("maxSpeakers", asMaxSpeakers(Number(e.target.value)))}
           />
           <p className="field-hint">
-            Downloads two small ONNX models (~32 MB) on first use into{" "}
-            <code>~/.cache/voxmd/diarize/</code>. Each transcript line becomes{" "}
+            On first use this downloads two ONNX models plus the ONNX Runtime library into{" "}
+            <code>~/.cache/voxmd/diarize/</code> — about 40 MB on Linux, more on Windows and
+            macOS, and roughly 55 MB on disk. Shipping the runtime separately keeps it out of
+            the app for everyone who leaves this off. Each transcript line becomes{" "}
             <code>[HH:MM:SS] **Speaker N:** …</code>. 0 lets clustering decide (at most{" "}
             {MAX_SPEAKERS} speakers). Set 2 for a two-person interview. If diarization fails, the
             unlabeled transcript is kept. Expect noticeably longer processing per file.
