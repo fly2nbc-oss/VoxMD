@@ -60,5 +60,6 @@ Desktop.ini
 *.profraw
 coverage/
 
-# Design-Arbeitsdateien des Einstellungs-Entwurfs (Artifact-Canvas)
+# Design-Arbeitsdateien der Entwürfe (Artifact-Canvas)
 design-settings/
+design-hauptseite/
