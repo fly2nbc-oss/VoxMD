@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-22
+
 ### Added
 
 - **OpenRouter** (and a Custom option) next to Deepseek in Settings. Provider choice fills the base URL; OpenRouter lists chat models for a dropdown. **Verify** checks the API key.
