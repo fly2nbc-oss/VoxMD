@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import type { MessageKey } from "../i18n";
+import { settleStrandedRows } from "../lib/jobs";
 import type {
   BatchCompletePayload,
   JobError,
@@ -114,6 +115,29 @@ export function useBatchEvents(
           if (e.payload.error) setStatusMsg(e.payload.error);
           else if (e.payload.cancelled) setStatusMsg(tRef.current("msg.batchCancelled"));
           else setStatusMsg(tRef.current("msg.batchComplete"));
+
+          // Nothing may still claim to be running once the batch is over.
+          const failure = e.payload.error;
+          const stopped = tRef.current("msg.batchStopped");
+          let stranded: JobRow[] = [];
+          setJobs((prev) => {
+            const result = settleStrandedRows(prev, failure, stopped);
+            stranded = result.stranded;
+            return result.jobs;
+          });
+          // Only a real failure belongs in the error panel; a cancel does not.
+          // The panel is also where a long backend message stays readable — the
+          // status line truncates it.
+          if (failure && stranded.length > 0) {
+            setErrors((prev) => [
+              ...prev.filter((x) => !stranded.some((s) => s.path === x.id)),
+              ...stranded.map((s) => ({
+                id: s.path,
+                displayName: s.displayName,
+                message: failure,
+              })),
+            ]);
+          }
         }),
       );
 

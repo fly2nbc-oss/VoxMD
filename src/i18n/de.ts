@@ -306,5 +306,6 @@ export const de: Messages = {
   "shortcut.settings": "Einstellungen",
   "shortcut.queue": "Warteschlange",
   "shortcut.dictation": "Diktat",
+  "msg.batchStopped": "Vor dem Abschluss dieses Eintrags beendet.",
   "msg.batchComplete": "Stapel abgeschlossen.",
 };

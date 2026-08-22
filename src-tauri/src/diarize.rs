@@ -1083,6 +1083,41 @@ mod tests {
         assert_eq!(turns, vec![(0.0, 1.0, 1), (1.0, 2.0, 2), (2.0, 3.0, 1)]);
     }
 
+    /// Runs a real ONNX session whenever the diarization assets are cached.
+    ///
+    /// This is the test that was missing when `ort`'s `alternative-backend`
+    /// feature shipped: everything compiled, every other test passed, CI was
+    /// green on both platforms, and the first `Session` panicked. Nothing short
+    /// of actually creating one catches that class of mistake, so on any machine
+    /// that has used diarization once, it is checked on every `cargo test`.
+    ///
+    /// Skips loudly where the assets are absent (CI), which is why
+    /// `ort_features_let_load_dynamic_initialise_itself` guards the manifest as
+    /// well — see the release checklist in CLAUDE.md.
+    #[test]
+    fn onnx_session_starts_with_the_shipped_features() {
+        if !models_cached() {
+            eprintln!(
+                "skipped: diarization assets not cached in {} — run a diarized batch first",
+                cache_dir().display()
+            );
+            return;
+        }
+        onnx_runtime::init(&cache_dir()).expect("initialise ONNX Runtime");
+        let mut session = seg_session(&cached(SEG_FILE)).expect("open segmentation model");
+        let samples = ndarray::Array1::<f32>::zeros(SAMPLE_RATE as usize * 10);
+        let view = samples.view().insert_axis(Axis(0)).insert_axis(Axis(1));
+        let inputs = ort::inputs![TensorRef::from_array_view(view.into_dyn()).unwrap()];
+        let outputs = session.run(inputs).expect("run segmentation");
+        let (shape, _) = outputs
+            .get("output")
+            .expect("output tensor")
+            .try_extract_tensor::<f32>()
+            .expect("extract output");
+        // 589 frames per 10 s window — the same number `frame_offset` is built on.
+        assert_eq!(shape[1], 589, "unexpected frame count {shape:?}");
+    }
+
     /// Set `VOXMD_DIARIZE_AUDIO` to an episode file to print clustering stats.
     /// Without the variable this is a no-op so the suite stays green.
     #[test]

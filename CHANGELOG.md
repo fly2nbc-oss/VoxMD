@@ -59,6 +59,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - The `.deb` now declares `libasound2` and `libdbus-1-3`, which `cpal` and `keepawake` link against.
 - Starting a batch and starting dictation could both claim a `WhisperContext` in a narrow window.
 - A summary configured against a local model server was skipped in silence, because the check demanded a non-empty API key.
+- **A row could sit on an active stage forever.** When a batch ended on a backend error, whatever was mid-flight kept showing "Whisper" or "Speakers" — indistinguishable from still working. Every non-terminal row is now settled when `batch_complete` arrives, and the batch error lands in the error panel where it stays readable instead of being truncated in the status line.
 
 ## [1.0.8] - 2026-08-03
 

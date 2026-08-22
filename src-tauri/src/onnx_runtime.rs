@@ -251,6 +251,33 @@ mod tests {
         assert!(d.sha256.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    /// `alternative-backend` is the one ort feature that must never be added
+    /// here, and nothing else in the build catches it: the crate compiles, every
+    /// unit test passes, CI is green — and then the first `Session` panics with
+    /// "attempted to use `ort` APIs before initializing a backend", because the
+    /// feature swaps `ort::api()` from `get_or_init(|| dlopen(…))` to a bare
+    /// `get()` and `load-dynamic` never runs. Checked against the manifest,
+    /// since a dependency's feature set is invisible to `cfg!`.
+    #[test]
+    fn ort_features_let_load_dynamic_initialise_itself() {
+        let manifest = std::fs::read_to_string("Cargo.toml").expect("read Cargo.toml");
+        let block = manifest
+            .split_once("\nort = {")
+            .and_then(|(_, rest)| rest.split_once("] }"))
+            .map(|(block, _)| block)
+            .expect("ort dependency block in Cargo.toml");
+
+        assert!(
+            block.contains("\"load-dynamic\""),
+            "ort must keep `load-dynamic`; onnx_runtime.rs provisions the dylib itself"
+        );
+        assert!(
+            !block.contains("alternative-backend"),
+            "ort must NOT enable `alternative-backend` — it disables load-dynamic's \
+             self-initialisation and every Session panics at runtime"
+        );
+    }
+
     #[test]
     fn hex_pads_each_byte() {
         assert_eq!(hex(&[0x00, 0x0f, 0xff]), "000fff");

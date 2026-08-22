@@ -307,5 +307,6 @@ export const fr: Messages = {
   "shortcut.settings": "Paramètres",
   "shortcut.queue": "File d’attente",
   "shortcut.dictation": "Dictée",
+  "msg.batchStopped": "Arrêté avant la fin de cette entrée.",
   "msg.batchComplete": "Lot terminé.",
 };

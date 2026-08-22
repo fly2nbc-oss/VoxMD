@@ -80,6 +80,43 @@ export function outputPathOf(row: JobRow): string | null {
   return null;
 }
 
+/** Stages a row can end on. Anything else means work is still in flight. */
+export const TERMINAL_STAGES = new Set(["done", "error", "skipped"]);
+
+/**
+ * Gives every still-running row a terminal stage once the batch is over.
+ *
+ * The backend emits a terminal event per item on the paths it controls, but a
+ * panic in the Whisper task takes the loop down with rows left on `whisper` or
+ * `diarize` — and a row frozen on an active stage looks exactly like one that is
+ * still working. After `batch_complete` nothing may claim to be running.
+ *
+ * `failure` is the batch-level error, verbatim from the backend; without one the
+ * rows were simply never reached, which is not a failure of theirs.
+ */
+export function settleStrandedRows(
+  jobs: Record<string, JobRow>,
+  failure: string | undefined,
+  stoppedMessage: string,
+): { jobs: Record<string, JobRow>; stranded: JobRow[] } {
+  const next: Record<string, JobRow> = {};
+  const stranded: JobRow[] = [];
+  for (const [id, row] of Object.entries(jobs)) {
+    if (TERMINAL_STAGES.has(row.stage)) {
+      next[id] = row;
+      continue;
+    }
+    const settled: JobRow = {
+      ...row,
+      stage: failure ? "error" : "skipped",
+      message: failure ?? stoppedMessage,
+    };
+    next[id] = settled;
+    stranded.push(settled);
+  }
+  return { jobs: stranded.length ? next : jobs, stranded };
+}
+
 export function toMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

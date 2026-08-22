@@ -306,5 +306,6 @@ export const it: Messages = {
   "shortcut.settings": "Impostazioni",
   "shortcut.queue": "Coda",
   "shortcut.dictation": "Dettatura",
+  "msg.batchStopped": "Interrotto prima del completamento di questa voce.",
   "msg.batchComplete": "Lotto completato.",
 };

@@ -63,15 +63,17 @@ pyannote-rs = { version = "0.3", features = ["load-dynamic"] }
 # pyannote-rs 0.3.4 declares `ort = "2.0.0-rc.10"`, which also matches later
 # rcs. rc.13 pulled a second `ndarray` and SessionBuilder is not Send/Sync, so
 # the crate does not compile. Pin the version it was written against.
-# `alternative-backend` maps to `ort-sys/disable-linking`, which turns ort-sys's
-# build script into a no-op. Without it `download-binaries` — still enabled
-# through pyannote-rs's ort defaults, which a dependent cannot switch off —
-# fetches the 94 MB static archive on every clean build only to not link it.
+# Do NOT add `alternative-backend` here. It looks like a way to stop
+# `download-binaries` — still enabled through pyannote-rs's ort defaults, which
+# a dependent cannot switch off — from fetching a 94 MB static archive on every
+# clean build. But it also swaps `ort::api()` from `get_or_init(|| dlopen(…))`
+# to a bare `get()`, so `load-dynamic` never runs and the first Session panics
+# with "attempted to use `ort` APIs before initializing a backend". The build
+# and every unit test still pass; only real diarization breaks.
 ort = { version = "=2.0.0-rc.10", default-features = false, features = [
     "ndarray",
     "std",
     "load-dynamic",
-    "alternative-backend",
 ] }
 # Unpacking the onnxruntime release asset (.tgz on Linux/macOS, .zip on Windows)
 # and checking its published hash.

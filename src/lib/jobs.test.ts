@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { en } from "../i18n/en";
 import { format, messagesFor, type MessageKey } from "../i18n";
-import { badgeForStage, detailsForRow, outputPathOf } from "./jobs";
+import { badgeForStage, detailsForRow, outputPathOf, settleStrandedRows } from "./jobs";
 import type { JobRow } from "../types";
 
 const t = (key: MessageKey, params?: Record<string, string | number>) =>
@@ -91,5 +91,46 @@ describe("detailsForRow", () => {
     expect(detailsForRow(row({ stage: "llm", message: "Summary… (part 2/3)" }), tDe)).toBe(
       "Summary… (part 2/3)",
     );
+  });
+});
+
+describe("settleStrandedRows", () => {
+  const rows = (...specs: Array<[string, string]>): Record<string, JobRow> =>
+    Object.fromEntries(
+      specs.map(([path, stage]) => [path, { path, displayName: path, stage }]),
+    );
+
+  it("leaves a fully settled batch untouched, by identity", () => {
+    const before = rows(["a", "done"], ["b", "error"], ["c", "skipped"]);
+    const after = settleStrandedRows(before, undefined, "stopped");
+    expect(after.jobs).toBe(before);
+    expect(after.stranded).toEqual([]);
+  });
+
+  /** The reported bug: a panic left a row on "diarize" forever. */
+  it("turns a row frozen mid-stage into a failure carrying the batch error", () => {
+    const before = rows(["a", "done"], ["b", "diarize"], ["c", "queued"]);
+    const { jobs, stranded } = settleStrandedRows(before, "task 65 panicked", "stopped");
+    expect(jobs.a.stage).toBe("done");
+    expect(jobs.b).toMatchObject({ stage: "error", message: "task 65 panicked" });
+    expect(jobs.c).toMatchObject({ stage: "error", message: "task 65 panicked" });
+    expect(stranded.map((r) => r.path)).toEqual(["b", "c"]);
+  });
+
+  it("marks them skipped, not failed, when the batch ended without an error", () => {
+    const { jobs, stranded } = settleStrandedRows(rows(["b", "whisper"]), undefined, "stopped");
+    expect(jobs.b).toMatchObject({ stage: "skipped", message: "stopped" });
+    // A cancel is not the row's failure, so it stays out of the error panel.
+    expect(stranded).toHaveLength(1);
+  });
+
+  it("covers every non-terminal stage the backend can emit", () => {
+    const active = ["queued", "download", "whisper", "diarize", "llm"];
+    const { jobs } = settleStrandedRows(
+      rows(...active.map((s) => [s, s] as [string, string])),
+      "boom",
+      "stopped",
+    );
+    for (const stage of active) expect(jobs[stage].stage, stage).toBe("error");
   });
 });

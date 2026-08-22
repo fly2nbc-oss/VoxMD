@@ -307,6 +307,7 @@ export const en = {
   "shortcut.settings": "Settings",
   "shortcut.queue": "Queue",
   "shortcut.dictation": "Dictation",
+  "msg.batchStopped": "Stopped before this entry finished.",
   "msg.batchComplete": "Batch complete.",
 } as const;
 
