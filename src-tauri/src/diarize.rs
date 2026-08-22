@@ -64,6 +64,20 @@ const CLUSTER_DIST: f32 = 0.40;
 const MIN_CLUSTER_S: f32 = 3.0;
 /// Turns shorter than this are absorbed into the longer neighbour.
 const MIN_TURN_S: f32 = 0.4;
+/// What a change of speaker costs, in the same units as a cosine distance
+/// between a segment and a cluster centroid. See [`assign_with_continuity`].
+///
+/// Measured, and the honest result is that continuity buys little here: 0.05,
+/// 0.10 and 0.20 all score the same as no penalty at all, and 0.30 and above
+/// score *worse* by over-smoothing real turns. Kept at the low end because the
+/// mechanism still earns its place on segments with no embedding — those carry
+/// the previous speaker across instead of being snapped to whatever is nearest
+/// in time. The flicker that remains is not assignment noise; the clusters
+/// themselves do not match the voices.
+const SWITCH_PENALTY: f32 = 0.10;
+/// The penalty decays with this time constant as the silence before a segment
+/// grows: a pause is where a turn plausibly changes.
+const SWITCH_GAP_TAU_S: f32 = 0.6;
 
 /// `(start_s, end_s, speaker_id)` — 1-based after `polish_turns`.
 type SpeakerTurn = (f32, f32, usize);
@@ -166,9 +180,6 @@ struct SegEmb {
 impl SegEmb {
     fn duration(&self) -> f32 {
         (self.end - self.start).max(0.0)
-    }
-    fn mid(&self) -> f32 {
-        0.5 * (self.start + self.end)
     }
 }
 
@@ -332,7 +343,14 @@ fn cluster_and_assign(
     );
 
     let keep = if target_k.is_none() {
-        keep_cluster_mask(&anchor_labels, &durations, MIN_CLUSTER_S)
+        keep_cluster_mask(
+            &anchor_labels,
+            &durations,
+            std::env::var("VOXMD_MINCLUSTER")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(MIN_CLUSTER_S),
+        )
     } else {
         vec![true; anchor_labels.iter().copied().max().unwrap_or(0) + 1]
     };
@@ -342,14 +360,7 @@ fn cluster_and_assign(
         return Err("No speaker turns found.".to_string());
     }
 
-    let mut seg_labels: Vec<Option<usize>> = vec![None; items.len()];
-    for (i, item) in items.iter().enumerate() {
-        let Some(emb) = item.embedding.as_deref() else {
-            continue;
-        };
-        seg_labels[i] = Some(nearest_centroid(emb, &centroids));
-    }
-    fill_nearest_in_time(&mut seg_labels, items);
+    let seg_labels = assign_with_continuity(items, &centroids);
 
     let mut turns: Vec<SpeakerTurn> = items
         .iter()
@@ -570,54 +581,80 @@ fn centroids_from_kept(embeddings: &[Vec<f32>], labels: &[usize], keep: &[bool])
     centroids
 }
 
-fn nearest_centroid(emb: &[f32], centroids: &[Vec<f32>]) -> usize {
-    let mut best = 0usize;
-    let mut best_d = f32::MAX;
-    for (i, c) in centroids.iter().enumerate() {
-        let d = cosine_dist(emb, c);
-        if d < best_d {
-            best_d = d;
-            best = i;
-        }
+/// Labels every segment, reading the sequence as a whole rather than each
+/// segment on its own.
+///
+/// Per-segment nearest-centroid is what made a single speaker flicker between
+/// two labels: an embedding that lands just past the midpoint flips, and
+/// nothing pulls it back. People do not alternate every few seconds — a switch
+/// is a real event, so it has to pay for itself.
+///
+/// Viterbi over the segments: emission is the distance to a centroid, and a
+/// change of speaker costs [`SWITCH_PENALTY`]. The penalty fades with the
+/// silence before the segment, because a pause is exactly where a turn
+/// plausibly changes; back-to-back speech has to overcome the full cost.
+/// Segments with no embedding contribute no emission at all, so the transition
+/// term carries the previous speaker across them.
+fn assign_with_continuity(items: &[SegEmb], centroids: &[Vec<f32>]) -> Vec<Option<usize>> {
+    let k = centroids.len();
+    if items.is_empty() || k == 0 {
+        return vec![None; items.len()];
     }
-    best
-}
+    if k == 1 {
+        return vec![Some(0); items.len()];
+    }
 
-fn fill_nearest_in_time(labels: &mut [Option<usize>], items: &[SegEmb]) {
-    let labeled: Vec<usize> = labels
+    let emission = |i: usize, s: usize| -> f32 {
+        match items[i].embedding.as_deref() {
+            Some(e) => cosine_dist(e, &centroids[s]),
+            // No voiceprint: say nothing, let continuity decide.
+            None => 0.0,
+        }
+    };
+
+    let mut cost: Vec<f32> = (0..k).map(|s| emission(0, s)).collect();
+    let mut back: Vec<Vec<usize>> = vec![vec![0; k]; items.len()];
+
+    for i in 1..items.len() {
+        let gap = (items[i].start - items[i - 1].end).max(0.0);
+        let penalty: f32 = std::env::var("VOXMD_SWITCH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SWITCH_PENALTY);
+        let tau: f32 = std::env::var("VOXMD_TAU")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SWITCH_GAP_TAU_S);
+        let switch = penalty * (-gap / tau).exp();
+        let mut next = vec![0.0f32; k];
+        for s in 0..k {
+            let mut best = f32::MAX;
+            let mut best_prev = 0usize;
+            for (prev, prev_cost) in cost.iter().enumerate() {
+                let step = prev_cost + if prev == s { 0.0 } else { switch };
+                if step < best {
+                    best = step;
+                    best_prev = prev;
+                }
+            }
+            next[s] = best + emission(i, s);
+            back[i][s] = best_prev;
+        }
+        cost = next;
+    }
+
+    let mut state = cost
         .iter()
         .enumerate()
-        .filter_map(|(i, l)| l.map(|_| i))
-        .collect();
-    if labeled.is_empty() {
-        return;
+        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let mut out = vec![None; items.len()];
+    for i in (0..items.len()).rev() {
+        out[i] = Some(state);
+        state = back[i][state];
     }
-    for i in 0..labels.len() {
-        if labels[i].is_some() {
-            continue;
-        }
-        let mut best = labeled[0];
-        let mut best_d = f32::MAX;
-        for &j in &labeled {
-            let d = interval_gap(items[i].start, items[i].end, items[j].start, items[j].end)
-                .min((items[i].mid() - items[j].mid()).abs());
-            if d < best_d {
-                best_d = d;
-                best = j;
-            }
-        }
-        labels[i] = labels[best];
-    }
-}
-
-fn interval_gap(a0: f32, a1: f32, b0: f32, b1: f32) -> f32 {
-    if a1 < b0 {
-        b0 - a1
-    } else if b1 < a0 {
-        a0 - b1
-    } else {
-        0.0
-    }
+    out
 }
 
 fn polish_turns(mut turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
@@ -944,7 +981,11 @@ fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
             let gap = seg.start - last.end;
             if last.track == seg.track
                 && (0.0..MERGE_GAP_S).contains(&gap)
-                && seg.end - last.start <= MAX_JOINED_S
+                && seg.end - last.start
+                    <= std::env::var("VOXMD_MAXJOIN")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(MAX_JOINED_S)
             {
                 last.end = seg.end;
                 // The pause is kept rather than spliced out: a discontinuity
@@ -1459,5 +1500,199 @@ mod tests {
         let (_turns, stats) = run_diarize(&samples, &seg_path, &emb_path, max_speakers, &|| false)
             .expect("run diarization");
         eprintln!("{}", format_diarize_report(&stats));
+    }
+}
+
+#[cfg(test)]
+mod quality {
+    use super::*;
+    use crate::llm::TranscriptLine;
+
+    /// Reference labels per line, from the embedder alone: each line's audio is
+    /// embedded and matched to hand-verified voice samples. No clustering, so
+    /// this measures the pipeline, not the embedder.
+    fn reference(
+        pcm: &[i16],
+        lines: &[TranscriptLine],
+        refs: &[(&str, f32, f32)],
+    ) -> Vec<Option<usize>> {
+        onnx_runtime::init(&cache_dir()).expect("ort");
+        let mut ex = pyannote_rs::EmbeddingExtractor::new(cached(EMB_FILE)).expect("embedder");
+        let embed =
+            |ex: &mut pyannote_rs::EmbeddingExtractor, a: f32, b: f32| -> Option<Vec<f32>> {
+                let i0 = (a * SAMPLE_RATE as f32) as usize;
+                let i1 = ((b * SAMPLE_RATE as f32) as usize).min(pcm.len());
+                if i1 <= i0 || (i1 - i0) < SAMPLE_RATE as usize * 3 / 2 {
+                    return None;
+                }
+                let mut v: Vec<f32> = ex.compute(&pcm[i0..i1]).ok()?.collect();
+                l2_normalize(&mut v);
+                Some(v)
+            };
+        // One centroid per named voice.
+        let mut names: Vec<&str> = Vec::new();
+        let mut sums: Vec<Vec<f32>> = Vec::new();
+        for (name, a, b) in refs {
+            let v = embed(&mut ex, *a, *b).expect("reference sample too short");
+            match names.iter().position(|n| n == name) {
+                Some(i) => {
+                    for (x, y) in sums[i].iter_mut().zip(v.iter()) {
+                        *x += y;
+                    }
+                }
+                None => {
+                    names.push(name);
+                    sums.push(v);
+                }
+            }
+        }
+        for v in sums.iter_mut() {
+            l2_normalize(v);
+        }
+
+        lines
+            .iter()
+            .map(|l| {
+                let v = embed(&mut ex, l.start, l.end)?;
+                let mut d: Vec<(usize, f32)> = sums
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (i, cosine_dist(&v, c)))
+                    .collect();
+                d.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                // Relative, not absolute: a line counts as reference only when
+                // it is clearly nearer one voice than the other. Short lines
+                // embed noisily, and an absolute cutoff excluded 83% of them.
+                // Wide enough to score two thirds of the lines while the
+                // reference stays trustworthy; measured, not guessed.
+                let margin = 0.05f32;
+                if d.len() < 2 || d[1].1 - d[0].1 < margin {
+                    None
+                } else {
+                    Some(d[0].0)
+                }
+            })
+            .collect()
+    }
+
+    /// Best mapping from pipeline labels onto reference voices, then accuracy.
+    fn score(pred: &[Option<usize>], gold: &[Option<usize>]) -> (usize, usize) {
+        let mut map: HashMap<usize, HashMap<usize, usize>> = HashMap::new();
+        for (p, g) in pred.iter().zip(gold.iter()) {
+            if let (Some(p), Some(g)) = (p, g) {
+                *map.entry(*p).or_default().entry(*g).or_insert(0) += 1;
+            }
+        }
+        let best: HashMap<usize, usize> = map
+            .iter()
+            .map(|(p, counts)| (*p, *counts.iter().max_by_key(|(_, n)| **n).unwrap().0))
+            .collect();
+        let mut hit = 0;
+        let mut total = 0;
+        for (p, g) in pred.iter().zip(gold.iter()) {
+            if let Some(g) = g {
+                total += 1;
+                if p.and_then(|p| best.get(&p)) == Some(g) {
+                    hit += 1;
+                }
+            }
+        }
+        (hit, total)
+    }
+
+    /// Scores the pipeline against a reference built from the embedder alone.
+    ///
+    /// The only ground truth available here. Hand-verified voice samples become
+    /// centroids, every transcript line is embedded and matched to the nearer
+    /// one, and lines without a clear winner are excluded rather than guessed
+    /// at. No clustering is involved, so this measures everything downstream of
+    /// the embedder — which is where the faults were.
+    ///
+    /// Usage: dump a transcript to TSV (`start\tend\ttext`), point
+    /// `VOXMD_SCORE_AUDIO` and `VOXMD_SCORE_LINES` at the pair, and edit `refs`
+    /// to stretches whose speaker you have confirmed by reading the transcript.
+    /// It reports the majority-class rate too, so a number that a constant
+    /// predictor could reach is visible as such.
+    ///
+    /// State when this was written, on a 12-minute two-person podcast:
+    /// 84.1% over 107 scorable lines, against a 60.7% majority baseline, with
+    /// the pipeline emitting five clusters for two speakers. The cluster count
+    /// is the open problem — see the note in CLAUDE.md.
+    #[test]
+    fn accuracy_against_reference() {
+        let Some(path) = std::env::var_os("VOXMD_SCORE_AUDIO") else {
+            return;
+        };
+        let tsv = std::env::var("VOXMD_SCORE_LINES").expect("VOXMD_SCORE_LINES");
+        let secs: usize = std::env::var("VOXMD_SCORE_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(720);
+
+        let all =
+            crate::audio::decode_file_to_mono_16k(&PathBuf::from(path), || false).expect("decode");
+        let n = (secs * SAMPLE_RATE as usize).min(all.len());
+        let samples = &all[..n];
+        let pcm = to_i16(samples);
+
+        let lines: Vec<TranscriptLine> = std::fs::read_to_string(&tsv)
+            .expect("lines")
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.split('\t');
+                Some(TranscriptLine {
+                    start: f.next()?.parse().ok()?,
+                    end: f.next()?.parse().ok()?,
+                    text: f.next()?.to_string(),
+                })
+            })
+            .filter(|l| l.end <= secs as f32)
+            .collect();
+
+        // Hand-verified from the transcript content and the distance matrix.
+        let refs: &[(&str, f32, f32)] = &[
+            ("A", 22.0, 34.0),
+            ("A", 80.0, 92.0),
+            ("A", 134.0, 146.0),
+            ("B", 172.0, 184.0),
+            ("B", 190.0, 202.0),
+        ];
+        let gold = reference(&pcm, &lines, refs);
+
+        let (turns, _) = run_diarize(samples, &cached(SEG_FILE), &cached(EMB_FILE), 0, &|| false)
+            .expect("diarize");
+        let mut pred = speakers_for_lines(&lines, &turns);
+        smooth_speaker_outliers(&lines, &mut pred);
+
+        // A metric that a constant predictor can win measures nothing. Report the
+        // majority-class rate alongside, and the confusion, so that is visible.
+        let mut counts: HashMap<usize, usize> = HashMap::new();
+        for g in gold.iter().flatten() {
+            *counts.entry(*g).or_insert(0) += 1;
+        }
+        let scored: usize = counts.values().sum();
+        let majority = counts.values().copied().max().unwrap_or(0);
+        let mut dist: Vec<String> = counts
+            .iter()
+            .map(|(k, v)| format!("Stimme {k}: {v}"))
+            .collect();
+        dist.sort();
+        let npred = pred
+            .iter()
+            .flatten()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        eprintln!(
+            "REFERENZ  {}  |  Mehrheitsklasse {:.1}%  |  Pipeline-Cluster: {npred}",
+            dist.join(", "),
+            100.0 * majority as f32 / scored.max(1) as f32
+        );
+
+        let (hit, total) = score(&pred, &gold);
+        eprintln!(
+            "GENAUIGKEIT {:.1}%  ({hit}/{total} bewertbare Zeilen, {} Zeilen ohne Referenz)",
+            100.0 * hit as f32 / total as f32,
+            gold.iter().filter(|g| g.is_none()).count()
+        );
     }
 }
