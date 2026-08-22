@@ -1,4 +1,18 @@
-export type LlmProvider = "deepseek" | "openrouter" | "custom";
+import type { UiLanguageSetting } from "./i18n";
+
+export type LlmProvider =
+  | "deepseek"
+  | "openrouter"
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "mistral"
+  | "groq"
+  | "xai"
+  | "together"
+  | "ollama"
+  | "lmstudio"
+  | "custom";
 
 export type AppMode = "queue" | "dictation";
 
@@ -33,6 +47,8 @@ export interface AppConfig {
   dictationModel: string;
   /** Empty string = system default input device. */
   microphoneName: string;
+  /** UI locale: `system` follows the OS, otherwise an `UI_LANGUAGES` code. */
+  uiLanguage: UiLanguageSetting;
   /** Last used output folder for podcast episode Markdown files. */
   podcastOutputDir: string;
   /** Recently used podcast feed URL + output directory pairs (UI only). */

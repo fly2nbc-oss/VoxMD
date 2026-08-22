@@ -541,7 +541,7 @@ pub async fn improve_text(cfg: &AppConfig, text: &str) -> Result<String, String>
     if trimmed.is_empty() {
         return Err("No text to improve.".to_string());
     }
-    if cfg.api_key.trim().is_empty() {
+    if cfg.api_key.trim().is_empty() && !cfg.endpoint_is_local() {
         return Err("API key missing.".to_string());
     }
     let client = make_client(cfg);
@@ -565,7 +565,7 @@ pub async fn translate_text(cfg: &AppConfig, text: &str, target: &str) -> Result
     if target.is_empty() {
         return Err("Target language missing.".to_string());
     }
-    if cfg.api_key.trim().is_empty() {
+    if cfg.api_key.trim().is_empty() && !cfg.endpoint_is_local() {
         return Err("API key missing.".to_string());
     }
     let client = make_client(cfg);
@@ -600,7 +600,9 @@ fn models_url(cfg: &AppConfig) -> String {
 
 pub async fn verify_api_key(cfg: &AppConfig) -> Result<(), String> {
     let key = cfg.api_key.trim();
-    if key.is_empty() {
+    // A model server on this machine authenticates nothing; requiring a key here
+    // would make Verify impossible for the very providers that need none.
+    if key.is_empty() && !cfg.endpoint_is_local() {
         return Err("API key missing.".to_string());
     }
     let base = api_base(cfg);
@@ -631,7 +633,7 @@ pub struct LlmModelInfo {
 
 pub async fn list_llm_models(cfg: &AppConfig) -> Result<Vec<LlmModelInfo>, String> {
     let key = cfg.api_key.trim();
-    if key.is_empty() {
+    if key.is_empty() && !cfg.endpoint_is_local() {
         return Ok(Vec::new());
     }
     let base = api_base(cfg);

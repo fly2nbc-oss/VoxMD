@@ -6,7 +6,9 @@ pub struct AppConfig {
     pub api_key: String,
     pub api_base_url: String,
     pub api_model: String,
-    /// `deepseek` | `openrouter` | `custom`. Unknown/missing values mean Deepseek.
+    /// Which preset filled `api_base_url` (`deepseek`, `openai`, `ollama`, …).
+    /// Frontend-only bookkeeping — the backend always talks to `api_base_url`.
+    /// Unknown or missing values mean Deepseek.
     #[serde(default = "default_llm_provider")]
     pub llm_provider: String,
     /// Whisper model: name ("turbo", "large-v3", "medium", "small", "base", "tiny")
@@ -50,6 +52,10 @@ pub struct AppConfig {
     /// Empty = system default input device.
     #[serde(default)]
     pub microphone_name: String,
+    /// UI locale (`system`, `en`, `de`, `fr`, `it`, `es`). Frontend-only; the
+    /// backend's own messages are English.
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
     /// Last used output folder for podcast episode Markdown files (frontend convenience).
     #[serde(default)]
     pub podcast_output_dir: String,
@@ -75,8 +81,30 @@ fn default_dictation_model() -> String {
     "small".to_string()
 }
 
+fn default_ui_language() -> String {
+    "system".to_string()
+}
+
 /// Hard cap for speaker clustering (auto and explicit).
 pub const MAX_SPEAKERS_CAP: u8 = 8;
+
+/// Loopback hosts, matched on the authority so a path or port cannot fake one.
+/// Mirrored by `isLocalEndpoint` in `src/lib/llmProviders.ts`.
+pub fn is_local_endpoint(api_base_url: &str) -> bool {
+    let url = api_base_url.trim().to_ascii_lowercase();
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(&url);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = match authority.rsplit_once(':') {
+        // `[::1]:1234` — keep the bracketed host, drop the port.
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => authority,
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1") || host.ends_with(".localhost")
+}
 
 /// Normalize locale string to ISO 639-1 (two lowercase letters).
 fn normalize_iso639_1(locale: &str) -> Option<String> {
@@ -127,6 +155,7 @@ impl Default for AppConfig {
             max_speakers: 0,
             dictation_model: default_dictation_model(),
             microphone_name: String::new(),
+            ui_language: default_ui_language(),
             podcast_output_dir: String::new(),
         }
     }
@@ -147,7 +176,14 @@ impl AppConfig {
     /// The summary is only generated when enabled AND an API key is present;
     /// without a key it is skipped silently instead of failing the run.
     pub fn summary_enabled(&self) -> bool {
-        self.include_summary && !self.api_key.trim().is_empty()
+        self.include_summary && (!self.api_key.trim().is_empty() || self.endpoint_is_local())
+    }
+
+    /// A model server on this machine (Ollama, LM Studio, llama.cpp …) needs no
+    /// key. Without this the summary would be skipped in silence for exactly the
+    /// providers where leaving the key blank is the normal setup.
+    pub fn endpoint_is_local(&self) -> bool {
+        is_local_endpoint(&self.api_base_url)
     }
 
     /// 0 = automatic; otherwise the exact speaker count, clamped to [`MAX_SPEAKERS_CAP`].
@@ -208,7 +244,10 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_iso639_1, resolve_summary_language, AppConfig, MAX_SPEAKERS_CAP};
+    use super::{
+        is_local_endpoint, normalize_iso639_1, resolve_summary_language, AppConfig,
+        MAX_SPEAKERS_CAP,
+    };
 
     #[test]
     fn resolve_explicit_iso_code() {
@@ -277,6 +316,7 @@ mod tests {
         assert_eq!(capped.speaker_count(), MAX_SPEAKERS_CAP);
         assert_eq!(cfg.dictation_model, "small");
         assert!(cfg.microphone_name.is_empty());
+        assert_eq!(cfg.ui_language, "system");
     }
 
     /// The settings drawer clamps the same value before it ever reaches Rust.
@@ -298,6 +338,52 @@ mod tests {
             value, MAX_SPEAKERS_CAP,
             "MAX_SPEAKERS_CAP in config.rs and MAX_SPEAKERS in src/lib/configStore.ts have drifted"
         );
+    }
+
+    /// The frontend applies the same rule before it decides the Markdown would
+    /// be empty; the two disagreeing means one side offers a run the other
+    /// refuses. The cases live in the TS test and are read from there.
+    #[test]
+    fn local_endpoint_matches_the_frontend() {
+        let ts = std::fs::read_to_string("../src/lib/llmProviders.test.ts")
+            .expect("read llmProviders.test.ts");
+        let block = ts
+            .split_once("LOCAL_ENDPOINT_CASES: Array<[string, boolean]> = [")
+            .and_then(|(_, rest)| rest.split_once("];"))
+            .map(|(list, _)| list)
+            .expect("LOCAL_ENDPOINT_CASES in llmProviders.test.ts");
+
+        let mut checked = 0;
+        for line in block.lines() {
+            let line = line.trim().trim_end_matches(',');
+            let Some(inner) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) else {
+                continue;
+            };
+            let (url, expected) = inner.rsplit_once(',').expect("pair");
+            let url = url.trim().trim_matches('"');
+            let expected: bool = expected.trim().parse().expect("bool");
+            assert_eq!(is_local_endpoint(url), expected, "{url}");
+            checked += 1;
+        }
+        assert!(checked >= 8, "only {checked} cases parsed");
+    }
+
+    #[test]
+    fn local_endpoints_need_no_api_key() {
+        let ollama = AppConfig {
+            api_key: String::new(),
+            api_base_url: "http://localhost:11434/v1".to_string(),
+            api_model: "llama3.1".to_string(),
+            ..AppConfig::default()
+        };
+        assert!(ollama.summary_enabled());
+        assert!(ollama.validate_for_run().is_ok());
+
+        let remote = AppConfig {
+            api_key: String::new(),
+            ..AppConfig::default()
+        };
+        assert!(!remote.summary_enabled());
     }
 
     #[test]

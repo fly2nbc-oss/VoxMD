@@ -1,3 +1,5 @@
+import { useT } from "../i18n/I18nProvider";
+
 interface Props {
   /** Radio group name; must be unique on the page. */
   name: string;
@@ -31,6 +33,7 @@ export function LanguagePicker({
   disabled = false,
   onChange,
 }: Props) {
+  const { t } = useT();
   const usingDefault = isDefault(value);
   const toIso = () => onChange(isoFallback() || "de");
 
@@ -55,7 +58,7 @@ export function LanguagePicker({
           disabled={disabled}
           onChange={toIso}
         />
-        <span>ISO code</span>
+        <span>{t("lang.isoCode")}</span>
       </label>
       <input
         className="input lang-iso-input"

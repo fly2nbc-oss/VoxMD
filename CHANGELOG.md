@@ -17,9 +17,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - **Prevent sleep** during a batch (`keepawake`). Default on; a failure is logged, not fatal.
 - **Keyboard shortcuts**: F5, Esc, Ctrl+O, Ctrl+,, Ctrl+1/2. Ignored while typing; open dialogs keep Escape.
 - Container formats **MKA, MKV, AIFF/AIF, CAF** (Symphonia). `.mov` / `.avi` / `.wmv` / `.mpeg` stay out.
+- **Interface language**: English, German, French, Italian, Spanish, or follow the system. Under Appearance. Messages coming from the transcription backend stay English.
+- **Nine more LLM providers**: OpenAI, Anthropic, Google Gemini, Mistral, Groq, xAI, Together AI, Ollama and LM Studio join DeepSeek, OpenRouter and Custom. Each fills its own base URL, and the model dropdown populates from the provider's own catalogue.
+- Local model servers (Ollama, LM Studio, any `localhost` endpoint) work **without an API key** — Verify, the model list, Improve/Translate and the summary all accept a blank key there.
 
 ### Changed
 
+- **Settings no longer scrolls.** The drawer is now up to 1024 px wide with a tab rail (Summary / Transcription / Speakers / Dictation / Appearance) and a two-column field grid, instead of four sections stacked in a 440 px column.
 - Whisper loop pulls from a process-wide deque instead of a fixed `Vec`, so the batch can grow. Channel capacity remains 1.
 - Linux CI/release images install cmake, ALSA, D-Bus, OpenSSL headers and g++ (needed by `pyannote-rs` / `cpal` / `keepawake`).
 - `ort` is pinned to `=2.0.0-rc.10` so `pyannote-rs` 0.3.4 compiles (later rcs pull a second `ndarray` and break Send/Sync).
@@ -50,6 +54,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 - Live dictation resampled each 1.2 s chunk with a fresh resampler, putting a filter transient at every chunk boundary.
 - The `.deb` now declares `libasound2` and `libdbus-1-3`, which `cpal` and `keepawake` link against.
 - Starting a batch and starting dictation could both claim a `WhisperContext` in a narrow window.
+- A summary configured against a local model server was skipped in silence, because the check demanded a non-empty API key.
 
 ## [1.0.8] - 2026-08-03
 

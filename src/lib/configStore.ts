@@ -1,4 +1,6 @@
 import { defaultConfig } from "../defaults";
+import { asUiLanguageSetting } from "../i18n";
+import { LLM_PROVIDER_PRESETS, providerForUrl } from "./llmProviders";
 import type { AppConfig, LlmProvider, PodcastRecent } from "../types";
 
 export const STORE_FILE = "voxmd-settings.json";
@@ -11,16 +13,12 @@ export const PODCAST_RECENTS_MAX = 10;
  *  the two stay identical, since the backend clamps to its own copy. */
 export const MAX_SPEAKERS = 8;
 
-const LLM_PROVIDERS: LlmProvider[] = ["deepseek", "openrouter", "custom"];
-
+/** A stored id that no longer exists (or never did) falls back to the URL. */
 function asLlmProvider(raw: unknown, apiBaseUrl: string): LlmProvider {
-  if (typeof raw === "string" && LLM_PROVIDERS.includes(raw as LlmProvider)) {
+  if (typeof raw === "string" && LLM_PROVIDER_PRESETS.some((p) => p.id === raw)) {
     return raw as LlmProvider;
   }
-  const url = apiBaseUrl.trim().replace(/\/+$/, "").toLowerCase();
-  if (url.includes("openrouter.ai")) return "openrouter";
-  if (url.includes("deepseek.com") || url.length === 0) return "deepseek";
-  return "custom";
+  return providerForUrl(apiBaseUrl);
 }
 
 function asBool(raw: unknown, fallback: boolean): boolean {
@@ -57,6 +55,7 @@ export function mergeConfig(saved: Partial<AppConfig> | null | undefined): AppCo
     maxSpeakers: asMaxSpeakers(saved.maxSpeakers),
     dictationModel: saved.dictationModel?.trim() ? saved.dictationModel : base.dictationModel,
     microphoneName: saved.microphoneName ?? base.microphoneName,
+    uiLanguage: asUiLanguageSetting(saved.uiLanguage),
     podcastOutputDir: saved.podcastOutputDir ?? base.podcastOutputDir,
     podcastRecents: normalizePodcastRecents(saved.podcastRecents),
   };

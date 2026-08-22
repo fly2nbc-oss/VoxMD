@@ -19,6 +19,7 @@ export const defaultConfig = (): AppConfig => ({
   maxSpeakers: 0,
   dictationModel: "small",
   microphoneName: "",
+  uiLanguage: "system",
   podcastOutputDir: "",
   podcastRecents: [],
 });

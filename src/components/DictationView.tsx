@@ -2,21 +2,36 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Copy, Eraser, Languages, Loader2, Mic, MicOff, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DictationEvents } from "../hooks/useDictationEvents";
+import { useT } from "../i18n/I18nProvider";
 import { toMsg } from "../lib/jobs";
 import type { AppConfig, MicrophoneInfo } from "../types";
 
-const TRANSLATE_TARGETS = [
-  "German",
-  "English",
-  "French",
-  "Spanish",
-  "Italian",
-  "Portuguese",
-  "Dutch",
-  "Polish",
-  "Japanese",
-  "Chinese",
+/**
+ * `value` goes into the prompt, so it stays the English language name the model
+ * understands; `label` is what the user reads. `Intl.DisplayNames` renders the
+ * label in the current UI language, and falls back to the English name where a
+ * platform has no data for it.
+ */
+const TRANSLATE_TARGETS: Array<{ value: string; iso: string }> = [
+  { value: "German", iso: "de" },
+  { value: "English", iso: "en" },
+  { value: "French", iso: "fr" },
+  { value: "Spanish", iso: "es" },
+  { value: "Italian", iso: "it" },
+  { value: "Portuguese", iso: "pt" },
+  { value: "Dutch", iso: "nl" },
+  { value: "Polish", iso: "pl" },
+  { value: "Japanese", iso: "ja" },
+  { value: "Chinese", iso: "zh" },
 ];
+
+function targetLabel(iso: string, fallback: string, uiLang: string): string {
+  try {
+    return new Intl.DisplayNames([uiLang], { type: "language" }).of(iso) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 interface Props {
   config: AppConfig;
@@ -40,6 +55,7 @@ export function DictationView({
   onMicrophoneChange,
   onStatus,
 }: Props) {
+  const { t, lang } = useT();
   const { stage, running, level, partial, lastFinal, clearPartial } = dictation;
   const [committed, setCommitted] = useState("");
   const [proposal, setProposal] = useState<string | null>(null);
@@ -63,12 +79,12 @@ export function DictationView({
         if (!cancelled) setMics(list);
       })
       .catch((e) => {
-        if (!cancelled) onStatus(`Microphones unavailable: ${toMsg(e)}`);
+        if (!cancelled) onStatus(t("dictation.micsUnavailable", { error: toMsg(e) }));
       });
     return () => {
       cancelled = true;
     };
-  }, [onStatus]);
+  }, [onStatus, t]);
 
   const captureOwnsMic = stage === "listening" || stage === "finalizing";
 
@@ -76,13 +92,13 @@ export function DictationView({
     if (captureOwnsMic || processing) return;
     let cancelled = false;
     void invoke("start_mic_monitor", { microphoneName: config.microphoneName }).catch((e) => {
-      if (!cancelled) onStatus(`Microphone: ${toMsg(e)}`);
+      if (!cancelled) onStatus(t("dictation.micError", { error: toMsg(e) }));
     });
     return () => {
       cancelled = true;
       void invoke("stop_mic_monitor");
     };
-  }, [captureOwnsMic, processing, config.microphoneName, onStatus]);
+  }, [captureOwnsMic, processing, config.microphoneName, onStatus, t]);
 
   // `seq` guards against re-appending the same commit when the view remounts
   // after a mode switch, since the hook keeps the last value around.
@@ -121,40 +137,40 @@ export function DictationView({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch (e) {
-      onStatus(`Could not copy: ${toMsg(e)}`);
+      onStatus(t("dictation.copyFailed", { error: toMsg(e) }));
     }
   };
 
   const startBlocked = !storeReady || processing || running;
   const startTitle = processing
-    ? "Stop the batch before dictating"
+    ? t("dictation.blockedByBatch")
     : running
-      ? "Already listening"
-      : "Start dictation (F5)";
+      ? t("dictation.alreadyListening")
+      : t("dictation.recordTitle");
 
   return (
     <div className="dictation">
       <div className="dictation-toolbar">
         <label className="dictation-mic">
-          <span className="field-label">Microphone</span>
+          <span className="field-label">{t("dictation.microphone")}</span>
           <select
             className="input"
             value={config.microphoneName}
             disabled={running}
             onChange={(e) => onMicrophoneChange(e.target.value)}
-            aria-label="Microphone"
+            aria-label={t("dictation.microphone")}
           >
-            <option value="">System default</option>
+            <option value="">{t("dictation.systemDefault")}</option>
             {mics.map((m) => (
               <option key={m.name} value={m.name}>
                 {m.name}
-                {m.isDefault ? " (default)" : ""}
+                {m.isDefault ? ` ${t("dictation.isDefault")}` : ""}
               </option>
             ))}
           </select>
         </label>
 
-        <div className="dictation-meter-wrap" title="Input level">
+        <div className="dictation-meter-wrap" title={t("dictation.inputLevel")}>
           <Mic
             size={16}
             className={meterPct > 6 ? "dictation-mic-live" : "dictation-mic-idle"}
@@ -170,10 +186,10 @@ export function DictationView({
             type="button"
             className="btn-secondary btn-sm"
             onClick={onStop}
-            title="Stop dictation (Esc)"
+            title={t("dictation.stopTitle")}
           >
             <MicOff size={16} aria-hidden />
-            <span>Stop</span>
+            <span>{t("dictation.stop")}</span>
           </button>
         ) : (
           <button
@@ -184,19 +200,19 @@ export function DictationView({
             title={startTitle}
           >
             <Mic size={16} aria-hidden />
-            <span>Record</span>
+            <span>{t("dictation.record")}</span>
           </button>
         )}
       </div>
 
       <p className="field-hint dictation-stage">
         {stage === "listening"
-          ? "Listening — pause to commit a phrase."
+          ? t("dictation.stageListening")
           : stage === "loading"
-            ? "Loading Whisper model…"
+            ? t("dictation.stageLoading")
             : stage === "finalizing"
-              ? "Finalizing…"
-              : "Idle. Speak to check the meter, then press Record (F5)."}
+              ? t("dictation.stageFinalizing")
+              : t("dictation.stageIdle")}
       </p>
 
       <div className="dictation-editor">
@@ -204,8 +220,8 @@ export function DictationView({
           className="input dictation-committed"
           value={committed}
           onChange={(e) => setCommitted(e.target.value)}
-          placeholder="Transcript appears here…"
-          aria-label="Dictation transcript"
+          placeholder={t("dictation.placeholder")}
+          aria-label={t("dictation.transcriptAria")}
           spellCheck
         />
         {partial.trim() ? (
@@ -217,7 +233,7 @@ export function DictationView({
 
       {proposal !== null ? (
         <div className="dictation-proposal">
-          <p className="field-label">Suggestion</p>
+          <p className="field-label">{t("dictation.suggestion")}</p>
           <textarea className="input dictation-proposal-text" value={proposal} readOnly />
           <div className="dictation-proposal-actions">
             <button
@@ -230,11 +246,11 @@ export function DictationView({
               }}
             >
               <Check size={14} aria-hidden />
-              Keep
+              {t("dictation.keep")}
             </button>
             <button type="button" className="btn-secondary btn-sm" onClick={() => setProposal(null)}>
               <X size={14} aria-hidden />
-              Discard
+              {t("dictation.discard")}
             </button>
           </div>
         </div>
@@ -248,7 +264,7 @@ export function DictationView({
           onClick={() => void copyAll()}
         >
           {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
-          <span>{copied ? "Copied" : "Copy"}</span>
+          <span>{copied ? t("dictation.copied") : t("dictation.copy")}</span>
         </button>
         <button
           type="button"
@@ -261,7 +277,7 @@ export function DictationView({
           }}
         >
           <Eraser size={14} aria-hidden />
-          <span>Clear</span>
+          <span>{t("dictation.clear")}</span>
         </button>
 
         {hasApiKey ? (
@@ -271,14 +287,14 @@ export function DictationView({
               className="btn-secondary btn-sm"
               disabled={!displayText.trim() || aiBusy !== null || running}
               onClick={() => void runAi("improve")}
-              title="Rewrite the transcript with the configured LLM"
+              title={t("dictation.improveTitle")}
             >
               {aiBusy === "improve" ? (
                 <Loader2 size={14} className="icon spin" aria-hidden />
               ) : (
                 <Sparkles size={14} aria-hidden />
               )}
-              <span>Improve</span>
+              <span>{t("dictation.improve")}</span>
             </button>
             <label className="dictation-translate">
               <select
@@ -286,11 +302,11 @@ export function DictationView({
                 value={translateTarget}
                 disabled={aiBusy !== null}
                 onChange={(e) => setTranslateTarget(e.target.value)}
-                aria-label="Translate into"
+                aria-label={t("dictation.translateInto")}
               >
-                {TRANSLATE_TARGETS.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                {TRANSLATE_TARGETS.map((target) => (
+                  <option key={target.value} value={target.value}>
+                    {targetLabel(target.iso, target.value, lang)}
                   </option>
                 ))}
               </select>
@@ -306,11 +322,11 @@ export function DictationView({
               ) : (
                 <Languages size={14} aria-hidden />
               )}
-              <span>Translate</span>
+              <span>{t("dictation.translate")}</span>
             </button>
           </>
         ) : (
-          <p className="field-hint">Add an API key in Settings to improve or translate.</p>
+          <p className="field-hint">{t("dictation.needKey")}</p>
         )}
       </div>
     </div>

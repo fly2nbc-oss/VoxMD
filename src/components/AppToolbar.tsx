@@ -13,6 +13,9 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { useT } from "../i18n/I18nProvider";
+import type { MessageKey } from "../i18n";
+import { summaryWouldRun } from "../lib/llmProviders";
 import type { AppConfig, AppMode } from "../types";
 
 type MdToggle = "includeMeta" | "includeSummary" | "includeTranscript";
@@ -60,36 +63,37 @@ export function AppToolbar({
   onOpenSettings,
   onOpenAbout,
 }: Props) {
-  const hasApiKey = config.apiKey.trim() !== "";
+  const { t, tn } = useT();
+  const summaryRuns = summaryWouldRun(config);
   const suffix = selectedCount > 0 ? ` (${selectedCount})` : "";
   const queueMode = mode === "queue";
 
   const mdToggles: Array<{
     key: MdToggle;
     icon: typeof FileText;
-    name: string;
+    label: MessageKey;
   }> = [
-    { key: "includeMeta", icon: FileText, name: "Metadata" },
-    { key: "includeSummary", icon: Sparkles, name: "Summary" },
-    { key: "includeTranscript", icon: Captions, name: "Transcript" },
+    { key: "includeMeta", icon: FileText, label: "toolbar.metadata" },
+    { key: "includeSummary", icon: Sparkles, label: "toolbar.summary" },
+    { key: "includeTranscript", icon: Captions, label: "toolbar.transcript" },
   ];
 
   return (
     <header className="app-bar">
       <h1 className="app-bar-title">VoxMD</h1>
 
-      <div className="mode-switch" role="tablist" aria-label="App mode">
+      <div className="mode-switch" role="tablist" aria-label={t("toolbar.appMode")}>
         <button
           type="button"
           role="tab"
           aria-selected={queueMode}
           className={`mode-switch-btn${queueMode ? " is-active" : ""}`}
           disabled={dictating}
-          title={dictating ? "Stop dictation first (Esc)" : "Queue mode (Ctrl+1)"}
+          title={dictating ? t("toolbar.queueBlocked") : t("toolbar.queueTitle")}
           onClick={() => onModeChange("queue")}
         >
           <List size={14} aria-hidden />
-          Queue
+          {t("toolbar.queue")}
         </button>
         <button
           type="button"
@@ -97,11 +101,11 @@ export function AppToolbar({
           aria-selected={!queueMode}
           className={`mode-switch-btn${queueMode ? "" : " is-active"}`}
           disabled={processing}
-          title={processing ? "Stop the batch first (Esc)" : "Dictation mode (Ctrl+2)"}
+          title={processing ? t("toolbar.dictationBlocked") : t("toolbar.dictationTitle")}
           onClick={() => onModeChange("dictation")}
         >
           <Mic size={14} aria-hidden />
-          Dictation
+          {t("toolbar.dictation")}
         </button>
       </div>
 
@@ -111,37 +115,32 @@ export function AppToolbar({
             type="button"
             className="btn-secondary btn-sm"
             onClick={onPickFiles}
-            title={
-              processing
-                ? "Add audio files to the running batch"
-                : "Add audio files (Ctrl+O)"
-            }
+            title={processing ? t("toolbar.filesTitleRunning") : t("toolbar.filesTitle")}
           >
             <FileAudio2 size={18} aria-hidden />
-            <span>Files</span>
+            <span>{t("toolbar.files")}</span>
           </button>
           <button
             type="button"
             className="btn-secondary btn-sm"
             onClick={onOpenPodcast}
-            title={
-              processing
-                ? "Add podcast episodes to the running batch"
-                : "Add podcast episodes from an RSS feed"
-            }
+            title={processing ? t("toolbar.podcastTitleRunning") : t("toolbar.podcastTitle")}
           >
             <Rss size={18} aria-hidden />
-            <span>Podcast</span>
+            <span>{t("toolbar.podcast")}</span>
           </button>
           <button
             type="button"
             className="btn-secondary btn-sm"
             disabled={processing || selectedCount === 0}
             onClick={onRemoveSelected}
-            title="Remove selected entries from the list"
+            title={t("toolbar.removeTitle")}
           >
             <ListX size={18} aria-hidden />
-            <span>Remove{suffix}</span>
+            <span>
+              {t("toolbar.remove")}
+              {suffix}
+            </span>
           </button>
           <button
             type="button"
@@ -150,21 +149,28 @@ export function AppToolbar({
             onClick={onStart}
             title={
               outputInvalid
-                ? "Enable Transcript or Summary (with API key) in the toolbar"
+                ? t("toolbar.startTitleInvalid")
                 : selectedCount > 0
-                  ? `Start processing ${selectedCount} selected entr${selectedCount === 1 ? "y" : "ies"} (F5)`
-                  : "Start processing all entries in the queue (F5)"
+                  ? tn(
+                      "toolbar.startTitleSelectedOne",
+                      "toolbar.startTitleSelectedMany",
+                      selectedCount,
+                    )
+                  : t("toolbar.startTitleAll")
             }
           >
             <Play size={18} aria-hidden />
-            <span>Start{suffix}</span>
+            <span>
+              {t("toolbar.start")}
+              {suffix}
+            </span>
           </button>
           {processing ? (
             <button
               type="button"
               className="icon-btn icon-btn-danger"
-              title="Cancel batch (Esc)"
-              aria-label="Cancel"
+              title={t("toolbar.cancelTitle")}
+              aria-label={t("common.cancel")}
               disabled={cancelling}
               onClick={onCancel}
             >
@@ -174,18 +180,22 @@ export function AppToolbar({
         </div>
       ) : (
         <div className="app-bar-actions">
-          <span className="app-bar-mode-hint">Live microphone transcription</span>
+          <span className="app-bar-mode-hint">{t("toolbar.liveHint")}</span>
         </div>
       )}
 
       <div className="app-bar-end">
         {queueMode
-          ? mdToggles.map(({ key, icon: Icon, name }) => {
+          ? mdToggles.map(({ key, icon: Icon, label }) => {
               const on = config[key];
+              const name = t(label);
               const title =
-                key === "includeSummary" && on && !hasApiKey
-                  ? "Summary — on (no API key)"
-                  : `${name} — ${on ? "on" : "off"}`;
+                key === "includeSummary" && on && !summaryRuns
+                  ? t("toolbar.summaryNoKey")
+                  : t("toolbar.toggleState", {
+                      name,
+                      state: on ? t("common.on") : t("common.off"),
+                    });
               return (
                 <button
                   key={key}
@@ -206,8 +216,10 @@ export function AppToolbar({
           <button
             type="button"
             className={`icon-btn${config.deleteSourceAfterSuccess ? " icon-btn-toggle-danger" : ""}`}
-            title={`Delete audio — ${config.deleteSourceAfterSuccess ? "on" : "off"}`}
-            aria-label="Delete audio"
+            title={t("toolbar.deleteAudioState", {
+              state: config.deleteSourceAfterSuccess ? t("common.on") : t("common.off"),
+            })}
+            aria-label={t("toolbar.deleteAudio")}
             aria-pressed={config.deleteSourceAfterSuccess}
             disabled={!storeReady}
             onClick={onToggleDeleteSource}
@@ -218,8 +230,8 @@ export function AppToolbar({
         <button
           type="button"
           className="icon-btn"
-          title="Settings — Ctrl+,"
-          aria-label="Settings"
+          title={t("toolbar.settingsTitle")}
+          aria-label={t("toolbar.settings")}
           onClick={onOpenSettings}
         >
           <Settings className="icon" size={22} aria-hidden />
@@ -227,8 +239,8 @@ export function AppToolbar({
         <button
           type="button"
           className="icon-btn"
-          title="About"
-          aria-label="About"
+          title={t("toolbar.about")}
+          aria-label={t("toolbar.about")}
           onClick={onOpenAbout}
         >
           <Info className="icon" size={22} aria-hidden />

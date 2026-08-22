@@ -63,12 +63,21 @@ Batch events live in `useBatchEvents`, dictation events in `useDictationEvents` 
 
 Commands that hit the filesystem, enumerate audio devices, `dlopen` the Vulkan loader or join a thread are declared `#[tauri::command(async)]` so they do not block the main thread.
 
+### UI language (`src/i18n/`)
+
+`en.ts` is the source of truth: `Messages = Record<keyof typeof en, string>`, so `de/fr/it/es` are type errors until they cover exactly the same keys. `i18n.test.ts` additionally checks that no entry is blank and that every locale keeps the same `{placeholder}` set. `format()` leaves an unmatched placeholder visible rather than blanking it.
+
+`App` builds the value with `useI18nValue(config.uiLanguage)` and puts it on `I18nContext`. **`useBatchEvents` and `useNativeDrop` take `t` as a parameter** — they run inside `App`, which is the component providing the context, so `useT()` there would read the English default. `ErrorBoundary` sits outside the provider and resolves the locale from `navigator` directly, since the settings store is exactly what may have failed.
+
+Backend messages (Whisper, the LLM call, file paths) stay English: they cross IPC as free text. `detailsForRow` translates only the placeholder shown *before* a backend message arrives.
+
 `AppConfig` crosses the boundary as a single struct. The Rust side (`config.rs`) uses `#[serde(rename_all = "camelCase")]`, so the Rust `snake_case` fields map 1:1 to the TS `camelCase` fields in `src/types.ts` / `src/defaults.ts`. **When adding a setting, update all of: `config.rs`, `types.ts`, `defaults.ts`, and the settings UI in `SettingsDrawer.tsx`.** Settings persist client-side via `@tauri-apps/plugin-store` (note the `whisperModelPath` → `whisperModel` serde alias for old stores). The processing queue is stored separately under `queueItems`.
 
 UI layout (not all in the settings drawer):
 
 - Toolbar: Queue/Dictation mode; Files, Podcast, Remove, Start; Markdown toggles (meta/summary/transcript); delete-audio trash toggle; Settings; About.
-- Settings sections: **Summary (LLM)** (provider / key / URL / model), **Transcription (Whisper)** (including prevent-sleep and speaker labels), **Dictation**, **Appearance** (System/Light/Dark).
+- Settings is a **wide tabbed drawer** (`min(1024px, 100%)`): Summary / Transcription / Speakers / Dictation / Appearance. The tabs exist to remove the scrollbar the four stacked sections needed — `.settings-body` is `overflow: hidden` on purpose, so a field that no longer fits shows up immediately instead of silently reintroducing a scroll; `.settings-panel` keeps `auto` as the safety valve for very short windows.
+- Appearance holds the theme *and* the interface language (`uiLanguage`: `system` or one of `en/de/fr/it/es`).
 - Start: if any queue rows are selected, only those are sent to `start_transcription`; otherwise the full queue. While a batch runs, newly added files go to `append_to_batch`.
 - Languages: Whisper `language` is `"auto"` or ISO; summary `summaryLanguage` is `"system"` or ISO.
 
@@ -106,7 +115,9 @@ There is **no LLM pass over the batch transcript** — the transcript section in
 - Diarization's frame grid is **per 10 s window**: `frame_offset(window_start, frame)`. `segmentation-3.0` emits 589 frames of 270 samples for a 160 000-sample window, so a counter carried across windows loses 970 samples each time (~22 s per hour). Upstream pyannote-rs has this bug; `speech_segments` documents it as fixed point 5.
 - `audio::Resampler` is stateful (biquads, fractional read position). Live capture must reuse **one** instance via `resampler_to_16k` — a fresh one per chunk puts a settling transient at every chunk boundary.
 - The dictation tail must still be transcribed after `STOP` is set, so `transcribe_buffer` takes its abort predicate as a parameter rather than reading `STOP` itself.
-- `MAX_SPEAKERS_CAP` (`config.rs`) and `MAX_SPEAKERS` (`src/lib/configStore.ts`) are checked against each other by a Rust test, as are the two `AUDIO_EXTENSIONS` lists.
+- `MAX_SPEAKERS_CAP` (`config.rs`) and `MAX_SPEAKERS` (`src/lib/configStore.ts`) are checked against each other by a Rust test, as are the two `AUDIO_EXTENSIONS` lists and `is_local_endpoint` / `isLocalEndpoint`.
+- **A local model server needs no API key.** `summary_enabled()` is `include_summary && (key non-empty || endpoint_is_local())`, and `summaryWouldRun` mirrors it in TypeScript. Without this, picking Ollama or LM Studio and leaving the key blank silently skipped the summary. `verify_api_key`, `list_llm_models`, `improve_text` and `translate_text` apply the same exemption.
+- Provider presets live in `src/lib/llmProviders.ts` — DeepSeek, OpenRouter, OpenAI, Anthropic, Google Gemini, Mistral, Groq, xAI, Together, Ollama, LM Studio, Custom. Each `baseUrl` was probed for a `/models` route. Anthropic and Gemini are reached through their OpenAI compatibility layers, which is why their paths look unusual. The backend never reads `llm_provider`; it only ever talks to `api_base_url`.
 - `cpal` links `libasound.so.2` and `keepawake` links `libdbus-1.so.3`; both are declared in `bundle.linux.deb.depends`.
 - `gpu-vulkan` is opt-in; `use_gpu` only applies when the binary was built with that feature **and** the Vulkan loader is present at runtime (`vulkan_runtime::gpu_usable()`). Missing `libvulkan.so` no longer prevents startup (link stub + runtime probe).
 - `delete_source_after_success` defaults to **false**. When enabled it deletes **`local_audio` only** (local files and downloaded podcast audio) — **never** the Markdown. Deletion failure is reported as a note, not a hard error.

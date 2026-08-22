@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useT } from "../i18n/I18nProvider";
 
 interface Props {
   title: string;
@@ -9,6 +10,8 @@ interface Props {
   variant?: "drawer" | "dialog";
   /** Extra class on the panel, e.g. to narrow the About box. */
   panelClassName?: string;
+  /** Extra class on the body, e.g. to drop its padding for a tabbed layout. */
+  bodyClassName?: string;
 }
 
 const FOCUSABLE =
@@ -22,7 +25,15 @@ const FOCUSABLE =
  * close, and a focus trap — previously Tab walked straight out of the panel into
  * the toolbar underneath, which stayed operable behind the overlay.
  */
-export function Modal({ title, onClose, children, variant = "dialog", panelClassName }: Props) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  variant = "dialog",
+  panelClassName,
+  bodyClassName,
+}: Props) {
+  const { t } = useT();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -72,7 +83,9 @@ export function Modal({ title, onClose, children, variant = "dialog", panelClass
 
   const Panel = variant === "drawer" ? "aside" : "div";
   const panelClass =
-    variant === "drawer" ? "drawer" : `modal-dialog${panelClassName ? ` ${panelClassName}` : ""}`;
+    variant === "drawer"
+      ? `drawer${panelClassName ? ` ${panelClassName}` : ""}`
+      : `modal-dialog${panelClassName ? ` ${panelClassName}` : ""}`;
 
   return (
     <div
@@ -96,14 +109,14 @@ export function Modal({ title, onClose, children, variant = "dialog", panelClass
           <button
             type="button"
             className="icon-btn"
-            title="Close"
-            aria-label="Close"
+            title={t("common.close")}
+            aria-label={t("common.close")}
             onClick={onClose}
           >
             <X size={18} aria-hidden />
           </button>
         </div>
-        <div className="drawer-body">{children}</div>
+        <div className={`drawer-body${bodyClassName ? ` ${bodyClassName}` : ""}`}>{children}</div>
       </Panel>
     </div>
   );
