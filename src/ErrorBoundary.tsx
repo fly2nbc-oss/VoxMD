@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { detectUiLanguage, format, messagesFor, type MessageKey } from "./i18n";
 
 interface Props {
   children: ReactNode;
@@ -27,16 +28,19 @@ export class ErrorBoundary extends Component<Props, State> {
     const { error } = this.state;
     if (!error) return this.props.children;
 
+    // Read straight from the browser locale: this boundary sits *outside* the
+    // i18n provider, and the settings store it would read is exactly the kind of
+    // thing that may have failed.
+    const messages = messagesFor(detectUiLanguage());
+    const t = (key: MessageKey) => format(messages, key);
+
     return (
       <div className="crash-screen" role="alert">
-        <h1>VoxMD hit an unexpected error</h1>
-        <p>
-          Your settings and any Markdown files already written are unaffected. Reloading usually
-          clears this.
-        </p>
+        <h1>{t("crash.title")}</h1>
+        <p>{t("crash.body")}</p>
         <pre className="crash-detail">{error.message}</pre>
         <button type="button" className="btn-primary" onClick={() => window.location.reload()}>
-          Reload
+          {t("crash.reload")}
         </button>
       </div>
     );

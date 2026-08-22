@@ -7,7 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/fly2nbc-oss/VoxMD/ci.yml?label=CI&logo=github)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/ci.yml)
 [![Platforms](https://img.shields.io/badge/ci-Windows%20%7C%20Linux-blue.svg)](https://github.com/fly2nbc-oss/VoxMD/actions/workflows/ci.yml)
 
-VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript frontend). It transcribes local audio files and **podcast episodes (RSS feeds)** locally using **whisper.cpp** (via `whisper-rs`), optionally generates a structured summary via an **OpenAI-compatible API** (e.g. Deepseek), and writes a **Markdown file** per source.
+VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript frontend). It transcribes local audio files and **podcast episodes (RSS feeds)** locally using **whisper.cpp** (via `whisper-rs`), optionally generates a structured summary via an **OpenAI-compatible API** (Deepseek, OpenRouter, or custom), and writes a **Markdown file** per source. A second mode records from the microphone and can send the text to the same LLM to improve or translate it.
 
 ---
 
@@ -35,15 +35,19 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 
 ## Features
 
-- **Pipelined processing**: At most **one** Whisper transcription and **one** LLM job run at the same time (bounded queue). While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more than one of each stage.
+- **Pipelined processing**: At most **one** Whisper transcription and **one** LLM job run at the same time (bounded queue). While the LLM works on file *n*, Whisper may transcribe file *n+1* — never more than one of each stage. Files and podcast episodes can be **appended while a batch is running**.
+- **Queue persistence**: Unfinished queue entries are saved with settings and restored on the next launch (completed exports are not kept).
 - **Podcast feeds**: Paste an RSS/Atom feed URL — VoxMD queues all episodes with audio enclosures. On **Start**, audio is downloaded into your chosen output folder (same basename as the Markdown). Recent feed URL + folder pairs are remembered (up to 10).
 - **Queue management**: Add audio via the file picker or **drag & drop**; checkbox selection with **Remove**; **Start** processes only selected entries when any are checked (otherwise the full queue).
 - **Configurable Markdown output** (toolbar toggles): **metadata**, **LLM summary**, and **transcript**. With the summary off, no API access is needed.
-- **Progress**: Per-file **Status** badge plus **Details** (download / transcription / summary); footer shows overall queue progress and optional model-download progress.
+- **Speaker labels** (optional): pyannote ONNX diarization after Whisper. Transcript lines become `[HH:MM:SS] **Speaker N:** text`.
+- **Dictation mode**: live microphone transcription with a separate (usually smaller) Whisper model. With an API key, **Improve** and **Translate** rewrite the dictation text; keep or discard the suggestion.
+- **Progress**: Per-file **Status** badge plus **Details** (download / transcription / speakers / summary); footer shows overall queue progress and optional model-download progress.
 - **English UI** with System / Light / Dark appearance; **About** via the toolbar info icon; **delete-audio toggle** (trash) deletes audio after a successful export — Markdown is always kept.
-- **Settings**: Summary (LLM) API, Whisper model / language / GPU, Appearance — persisted via `@tauri-apps/plugin-store`. Without an API key, the summary is skipped and VoxMD runs fully offline.
+- **Keyboard shortcuts**: F5 start / record, Esc cancel / stop, Ctrl+O files, Ctrl+, settings, Ctrl+1 queue, Ctrl+2 dictation (ignored while typing or a dialog is open).
+- **Settings**: Summary (LLM) provider / API, Whisper model / language / GPU, prevent-sleep, speakers, dictation model / microphone, Appearance — persisted via `@tauri-apps/plugin-store`. Without an API key, the summary is skipped and VoxMD runs fully offline.
 - **Whisper models**: Preset names (e.g. `turbo`) download from Hugging Face into `~/.cache/voxmd/whisper/`; **Custom path…** + **Choose…** for a local `.bin` / `.gguf`.
-- **Audio formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS (decoded via Symphonia).
+- **Audio formats**: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS, MKA, MKV, AIFF, CAF (decoded via Symphonia). Containers Symphonia cannot demux (`.mov`, `.avi`, `.wmv`, `.mpeg`) stay unsupported.
 - **Optional Vulkan**: Cargo feature `gpu-vulkan`. The loader is opened at runtime (missing `libvulkan` does not prevent startup; Whisper falls back to CPU).
 
 ## Quick Start
@@ -52,8 +56,8 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
    - **Windows** — portable `VoxMD.exe` (no installer), or the NSIS setup `.exe`. [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) must be present on the PC.
    - **Linux** — portable `.AppImage` (`chmod +x`, then run; it carries its own WebKitGTK and GTK libraries), or the `.deb`. Use the AppImage on anything without `.deb` support — Arch, Manjaro, Fedora, openSUSE. It is built on Ubuntu 24.04 and needs glibc 2.39 or newer; on older distributions build from source.
 2. Launch the app — the default Whisper model (`turbo`, ~800 MB) is **downloaded automatically** when needed (unless you point to a local model file).
-3. Optionally enter your **API key** and **base URL** (e.g. `https://api.deepseek.com`) under **Summary (LLM)** in Settings and press **Save**. No key? Enable Transcript in the toolbar; the summary is skipped automatically.
-4. Add **Files** (local audio) or a **Podcast** feed, optionally select entries, then press **Start**.
+3. Optionally pick a **provider** (Deepseek, OpenRouter, or Custom), enter your **API key**, and press **Verify** under **Summary (LLM)** in Settings, then **Save**. No key? Enable Transcript in the toolbar; the summary is skipped automatically.
+4. Add **Files** (local audio) or a **Podcast** feed, optionally select entries, then press **Start**. While a batch is running you can still add files — they join the live queue. Switch to **Dictation** (Ctrl+2) for microphone input.
 
 **Output:** a `.md` file next to each local audio file; podcast episodes write **audio + Markdown** into the folder chosen in the Podcast dialog (same stem, e.g. `2024 - Title.mp3` and `2024 - Title.md`). Existing `.md` files are skipped, so re-running a batch is idempotent.
 
@@ -63,18 +67,20 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 
 | Control | Description |
 |---|---|
-| Files / Podcast / Remove / Start | Queue management; Start uses the selection when any rows are checked |
+| Queue / Dictation | Mode switch (Ctrl+1 / Ctrl+2). A running batch and live dictation cannot overlap. |
+| Files / Podcast / Remove / Start | Queue management; Start uses the selection when any rows are checked (F5). Files and Podcast stay available during a run and append to it. |
 | Metadata / Summary / Transcript | Markdown sections to include (icons) |
 | Trash | When active (red): delete **audio** after a successful `.md` write (local files and podcast downloads). **Markdown is never deleted.** Default: off (keep audio) |
-| Settings / About | Settings drawer; About dialog |
+| Settings / About | Settings drawer (Ctrl+,); About dialog |
 
 ### Settings (gear icon)
 
 | Section | Fields | Notes |
 |---|---|---|
-| **Summary (LLM)** | API key, base URL, model, summary language | Used only when Summary is enabled in the toolbar. Base URL is the endpoint root (without `/v1/chat/completions`). Summary language: System or ISO. |
-| **Transcription (Whisper)** | Model, transcription language, Use GPU | Preset or **Custom path…**. Language: Auto-detect (default) or ISO. GPU needs a Vulkan-capable build + loader. |
-| **Appearance** | System / Light / Dark | Applied immediately |
+| **Summary (LLM)** | Provider, API key (+ Verify), base URL, model, summary language | Deepseek and OpenRouter fill the base URL; Custom leaves URL and model as free text. OpenRouter lists chat models for a dropdown. Used only when Summary is enabled in the toolbar. Base URL is the endpoint root (without `/chat/completions`). Summary language: System or ISO. |
+| **Transcription (Whisper)** | Model, language, Use GPU, prevent sleep, speaker labels | Preset or **Custom path…**. Language: Auto-detect (default) or ISO. GPU needs a Vulkan-capable build + loader. Prevent-sleep holds an idle-inhibit lock for a batch. Speaker labels download two ONNX models (~32 MB) into `~/.cache/voxmd/diarize/` on first use. |
+| **Dictation** | Model, default microphone | Separate Whisper weights for live capture. Smaller presets (e.g. `small`) keep memory next to a large batch model. |
+| **Appearance** | System / Light / Dark | Applied immediately. Shortcut list is shown here. |
 
 LLM sampling is fixed internally (temperature 0.3, generous token limit) and Whisper thread count is auto-detected — these are not settings.
 
@@ -98,9 +104,10 @@ Pick a preset in the dropdown (sizes shown). A ✓ means the model is already ca
 ## Transcript                  ← raw Whisper transcript (optional)
 
 [HH:MM:SS] Utterance text.
+[HH:MM:SS] **Speaker 1:** …   ← when speaker labels are on
 ```
 
-Each section is controlled by the **Markdown output** toggles in the toolbar. Transcript lines are the raw Whisper output with `[HH:MM:SS]` timestamps; the summary quotes reference those timestamps.
+Each section is controlled by the **Markdown output** toggles in the toolbar. Transcript lines are the Whisper output with `[HH:MM:SS]` timestamps (and optional speaker names); the summary quotes reference those timestamps.
 
 ## Supported Platforms & Formats
 
@@ -109,7 +116,7 @@ Each section is controlled by the **Markdown output** toggles in the toolbar. Tr
 | Linux    | ✅ tested on Ubuntu runner | ✅ |
 | Windows  | ✅ | ✅ |
 
-Audio formats: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS.
+Audio formats: MP3, M4A, MP4, WAV, OGG, FLAC, WebM, OPUS, MKA, MKV, AIFF, CAF.
 
 ## Development & Build
 
@@ -119,7 +126,8 @@ Prerequisites: **Rust stable**, **Node LTS**, system packages for [Tauri v2](htt
 
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-  librsvg2-dev patchelf clang libclang-dev llvm-dev
+  librsvg2-dev patchelf clang libclang-dev llvm-dev cmake pkg-config \
+  libasound2-dev libdbus-1-dev libssl-dev g++
 ```
 
 ```bash
@@ -168,9 +176,11 @@ VoxMD does **not** ship an in-app auto-updater. New versions are announced via G
 
 ## Roadmap & Known Issues
 
-- Whisper does not expose fine-grained percentage progress to the UI; stages **Download** / **Whisper** / **LLM** still indicate where time is spent.
-- No hard cancellation of an in-flight job (status updates until the pipeline finishes); episode downloads finish before a cancel takes effect.
+- Whisper does not expose fine-grained percentage progress to the UI; stages **Download** / **Whisper** / **Speakers** / **LLM** still indicate where time is spent.
+- No hard cancellation of an in-flight job (status updates until the pipeline finishes); episode downloads finish before a cancel takes effect. Dictation stop waits for the current Whisper chunk.
 - Linux AppImage bundling may fail if `linuxdeploy` is missing on the runner or developer machine.
+- Prevent-sleep can be ignored on Windows Modern Standby (especially on battery); a failure is logged and the batch continues.
+- `.mov` / `.avi` / `.wmv` / `.mpeg` are not accepted: Symphonia cannot demux them.
 
 ## Contributing
 

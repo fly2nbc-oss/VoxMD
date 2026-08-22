@@ -11,7 +11,8 @@ Thank you for your interest in VoxMD!
 ```bash
 # Debian/Ubuntu
 sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-  librsvg2-dev patchelf clang libclang-dev llvm-dev
+  librsvg2-dev patchelf clang libclang-dev llvm-dev cmake pkg-config \
+  libasound2-dev libdbus-1-dev libssl-dev g++
 ```
 
 ## Getting Started
@@ -71,7 +72,7 @@ Either configure a **preset name** (downloaded automatically on demand) or choos
 
 ## LLM Summary Stage
 
-The transcript in the output is the **raw Whisper text** (`[HH:MM:SS] text` lines) — there is no LLM pass over the transcript itself. The only LLM call is the summary (`generate_summary` in `src-tauri/src/llm.rs`): one request per file, prompt authored in English, output language enforced via the summary-language setting, fixed sampling (temperature 0.3, 8192 max tokens — not user-configurable). Podcast episode metadata (feed, title, date) is passed as orientation context. **Without an API key the summary is skipped silently** (`AppConfig::summary_enabled`), so runs work fully offline.
+The transcript in the output is the **raw Whisper text** (`[HH:MM:SS] text` lines) — there is no LLM pass over the transcript itself. The only LLM call is the summary (`generate_summary` in `src-tauri/src/llm.rs`): one request per file when the transcript fits, otherwise map-reduce in parts; prompt authored in English, output language enforced via the summary-language setting, fixed sampling (temperature 0.3, 8192 max tokens — not user-configurable). Podcast episode metadata (feed, title, date) is passed as orientation context. **Without an API key the summary is skipped silently** (`AppConfig::summary_enabled`), so runs work fully offline.
 
 ## Podcast Feeds
 

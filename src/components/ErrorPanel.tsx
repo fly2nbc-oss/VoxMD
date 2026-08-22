@@ -1,4 +1,5 @@
 import { TriangleAlert, X } from "lucide-react";
+import { useT } from "../i18n/I18nProvider";
 import type { JobError } from "../types";
 
 interface Props {
@@ -11,20 +12,19 @@ interface Props {
  * at a time, so without this every failure but the last scrolled past unseen.
  */
 export function ErrorPanel({ errors, onDismiss }: Props) {
+  const { t, tn } = useT();
   if (errors.length === 0) return null;
 
   return (
-    <section className="error-panel" role="alert" aria-label="Failed entries">
+    <section className="error-panel" role="alert" aria-label={t("errors.aria")}>
       <div className="error-panel-head">
         <TriangleAlert size={16} aria-hidden />
-        <strong>
-          {errors.length} {errors.length === 1 ? "entry" : "entries"} failed
-        </strong>
+        <strong>{tn("errors.failedOne", "errors.failedMany", errors.length)}</strong>
         <button
           type="button"
           className="icon-btn"
-          title="Dismiss"
-          aria-label="Dismiss error list"
+          title={t("errors.dismiss")}
+          aria-label={t("errors.dismissAria")}
           onClick={onDismiss}
         >
           <X size={16} aria-hidden />

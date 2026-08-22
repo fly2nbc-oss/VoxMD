@@ -161,7 +161,7 @@ pub async fn resolve_model(
     Ok(dest)
 }
 
-async fn download_file(
+pub(crate) async fn download_file(
     url: &str,
     dest: &Path,
     on_progress: impl Fn(u64, u64),
@@ -260,6 +260,23 @@ mod tests {
         assert!(names.contains(&"turbo".to_string()));
         assert!(!names.contains(&"large-v3-turbo".to_string()));
         assert_eq!(names.iter().filter(|n| *n == "turbo").count(), 1);
+    }
+
+    /// A model is written to and later read from the same path, because
+    /// `resolve_model` derives both from `cache_dir()`. A future split between
+    /// the two would silently re-download on every run.
+    #[test]
+    fn download_and_load_share_one_directory() {
+        let dir = cache_dir();
+        assert!(
+            dir.ends_with("voxmd/whisper") || dir.ends_with("voxmd\\whisper"),
+            "{dir:?}"
+        );
+        for (name, file, _) in MODELS {
+            let resolved = dir.join(filename_for(name).expect("preset resolves"));
+            assert_eq!(resolved.parent(), Some(dir.as_path()));
+            assert_eq!(resolved.file_name().and_then(|f| f.to_str()), Some(*file));
+        }
     }
 
     #[test]

@@ -1,7 +1,27 @@
+import type { UiLanguageSetting } from "./i18n";
+
+export type LlmProvider =
+  | "deepseek"
+  | "openrouter"
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "mistral"
+  | "groq"
+  | "xai"
+  | "together"
+  | "ollama"
+  | "lmstudio"
+  | "custom";
+
+export type AppMode = "queue" | "dictation";
+
 export interface AppConfig {
   apiKey: string;
   apiBaseUrl: string;
   apiModel: string;
+  /** Which catalog fills the model list; `custom` leaves URL and model as free text. */
+  llmProvider: LlmProvider;
   /** Model name ("turbo", "large-v3", …) or absolute path to local .bin/.gguf file */
   whisperModel: string;
   /** `"auto"` for Whisper language detection, or ISO 639-1 code (e.g. `de`). */
@@ -17,6 +37,18 @@ export interface AppConfig {
   includeSummary: boolean;
   /** Markdown output: raw Whisper transcript section. */
   includeTranscript: boolean;
+  /** Keep the machine from idle-sleeping while a batch runs. */
+  preventSleep: boolean;
+  /** Label Whisper lines with pyannote speaker turns. */
+  diarizationEnabled: boolean;
+  /** 0 = let clustering decide (at most 8); 1–8 = exact speaker count. */
+  maxSpeakers: number;
+  /** Whisper preset (or path) used only for live dictation. */
+  dictationModel: string;
+  /** Empty string = system default input device. */
+  microphoneName: string;
+  /** UI locale: `system` follows the OS, otherwise an `UI_LANGUAGES` code. */
+  uiLanguage: UiLanguageSetting;
   /** Last used output folder for podcast episode Markdown files. */
   podcastOutputDir: string;
   /** Recently used podcast feed URL + output directory pairs (UI only). */
@@ -56,12 +88,15 @@ export interface JobProgressPayload {
   /** Queue item id — the field is named `path` for historical reasons. */
   path: string;
   displayName: string;
-  /** queued, download, whisper, llm, done, skipped, error */
+  /** queued, download, whisper, diarize, llm, done, skipped, error */
   stage: string;
   whisperPct?: number;
   downloadPct?: number;
   overall?: { completed: number; total: number; pct: number };
   message?: string;
+  /** Markdown the row produced (`done`) or already had (`skipped` because it
+   *  exists). Absent for a cancelled skip, which is how the two are told apart. */
+  outputPath?: string;
 }
 
 /** One row of the queue table: the latest progress payload for that item. */
@@ -104,4 +139,21 @@ export interface EpisodeInfo {
   date?: string | null;
   link?: string | null;
   audioUrl: string;
+}
+
+/** One chat-model id from `list_llm_models`. */
+export interface LlmModelInfo {
+  id: string;
+}
+
+/** One capture device from `list_microphones`. */
+export interface MicrophoneInfo {
+  name: string;
+  isDefault: boolean;
+}
+
+/** Payload of the `dictation_status` event. */
+export interface DictationStatusPayload {
+  stage: string;
+  message?: string;
 }

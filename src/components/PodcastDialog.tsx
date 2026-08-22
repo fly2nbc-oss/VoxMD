@@ -1,4 +1,5 @@
 import { FolderOpen, Loader2, Trash2 } from "lucide-react";
+import { useT } from "../i18n/I18nProvider";
 import type { PodcastRecent } from "../types";
 import { Modal } from "./Modal";
 
@@ -31,11 +32,12 @@ export function PodcastDialog({
   onSubmit,
   onClose,
 }: Props) {
+  const { t } = useT();
   return (
-    <Modal title="Add podcast episodes" onClose={onClose}>
+    <Modal title={t("podcast.title")} onClose={onClose}>
       <div className="field">
         <label className="field-label" htmlFor="feedUrl">
-          RSS feed URL
+          {t("podcast.feedUrl")}
         </label>
         <input
           id="feedUrl"
@@ -49,31 +51,28 @@ export function PodcastDialog({
 
       <div className="field">
         <label className="field-label" htmlFor="podcastDir">
-          Output folder for episode Markdown
+          {t("podcast.outputDir")}
         </label>
         <div className="input-with-button">
           <input
             id="podcastDir"
             className="input"
-            placeholder="Choose a folder…"
+            placeholder={t("podcast.outputDirPlaceholder")}
             value={outputDir}
             onChange={(e) => onOutputDirChange(e.target.value)}
             disabled={busy}
           />
           <button type="button" className="btn-secondary btn-sm" onClick={onChooseDir} disabled={busy}>
             <FolderOpen size={16} aria-hidden />
-            <span>Choose…</span>
+            <span>{t("common.choose")}</span>
           </button>
         </div>
-        <p className="field-hint">
-          Audio and Markdown are saved here. The toolbar trash icon can delete the audio after
-          export — the Markdown file is always kept.
-        </p>
+        <p className="field-hint">{t("podcast.hint")}</p>
       </div>
 
       {recents.length > 0 ? (
         <div className="field">
-          <span className="field-label">Recent feeds</span>
+          <span className="field-label">{t("podcast.recents")}</span>
           <ul className="podcast-recents">
             {recents.map((recent) => (
               <li key={recent.feedUrl} className="podcast-recent-row">
@@ -81,7 +80,7 @@ export function PodcastDialog({
                   type="button"
                   className="podcast-recent-pick"
                   disabled={busy}
-                  title="Use this feed and folder"
+                  title={t("podcast.useRecent")}
                   onClick={() => onApplyRecent(recent)}
                 >
                   <span className="podcast-recent-title">{recent.feedTitle || recent.feedUrl}</span>
@@ -93,8 +92,10 @@ export function PodcastDialog({
                 <button
                   type="button"
                   className="icon-btn"
-                  title="Remove from recent list"
-                  aria-label={`Remove ${recent.feedTitle || recent.feedUrl}`}
+                  title={t("podcast.removeRecent")}
+                  aria-label={t("podcast.removeRecentAria", {
+                    name: recent.feedTitle || recent.feedUrl,
+                  })}
                   disabled={busy}
                   onClick={() => onRemoveRecent(recent.feedUrl)}
                 >
@@ -110,7 +111,7 @@ export function PodcastDialog({
 
       <div className="form-actions">
         <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>
-          Cancel
+          {t("common.cancel")}
         </button>
         <button
           type="button"
@@ -119,7 +120,7 @@ export function PodcastDialog({
           onClick={onSubmit}
         >
           {busy ? <Loader2 size={14} className="icon spin" aria-hidden /> : null}
-          {busy ? " Loading…" : "Add episodes"}
+          {busy ? t("common.loading") : t("podcast.submit")}
         </button>
       </div>
     </Modal>

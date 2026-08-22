@@ -6,12 +6,19 @@ describe("isAudioPath", () => {
     expect(isAudioPath("/a/b.MP3")).toBe(true);
     expect(isAudioPath("c:\\x\\y.FlAc")).toBe(true);
     expect(isAudioPath("file.webm")).toBe(true);
+    expect(isAudioPath("talk.mkv")).toBe(true);
+    expect(isAudioPath("clip.mka")).toBe(true);
+    expect(isAudioPath("voice.aiff")).toBe(true);
+    expect(isAudioPath("voice.aif")).toBe(true);
+    expect(isAudioPath("loop.caf")).toBe(true);
   });
 
   it("rejects non-audio and extension-less paths", () => {
     expect(isAudioPath("/a/b.txt")).toBe(false);
     expect(isAudioPath("/a/b")).toBe(false);
     expect(isAudioPath("archive.tar.gz")).toBe(false);
+    expect(isAudioPath("clip.mov")).toBe(false);
+    expect(isAudioPath("clip.avi")).toBe(false);
   });
 });
 

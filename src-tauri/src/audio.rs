@@ -11,6 +11,9 @@ use symphonia::core::meta::MetadataOptions;
 
 const TARGET_RATE: u32 = 16000;
 
+/// Sample rate Whisper (and the diarizer) expect after decoding.
+pub const SAMPLE_RATE: u32 = TARGET_RATE;
+
 /// Anti-alias cutoff, a little under the 8 kHz output Nyquist to leave the
 /// filter a transition band. Speech energy above this is mostly fricative
 /// detail, which matters far less than keeping folded content out of the band.
@@ -75,7 +78,7 @@ impl Biquad {
 /// (a three-hour 48 kHz episode used to need well over 2 GB). And it low-passes
 /// before decimating: plain interpolation folded everything above 8 kHz back
 /// into the audible band, which degrades what Whisper receives.
-struct Resampler {
+pub(crate) struct Resampler {
     ratio: f64,
     filter: Vec<Biquad>,
     /// Filtered input not yet consumed, plus the fractional read position in it.
@@ -85,7 +88,7 @@ struct Resampler {
 }
 
 impl Resampler {
-    fn new(from_rate: u32, to_rate: u32) -> Self {
+    pub(crate) fn new(from_rate: u32, to_rate: u32) -> Self {
         let from = f64::from(from_rate);
         let to = f64::from(to_rate);
         // Only downsampling aliases; upsampling needs no guard filter.
@@ -107,7 +110,7 @@ impl Resampler {
         }
     }
 
-    fn push(&mut self, chunk: &[f32]) {
+    pub(crate) fn push(&mut self, chunk: &[f32]) {
         self.pending.reserve(chunk.len());
         for &s in chunk {
             let mut v = f64::from(s);
@@ -139,6 +142,14 @@ impl Resampler {
         }
     }
 
+    /// Hands over everything resampled so far and keeps the filter state, so a
+    /// live capture can feed chunk after chunk through one instance. Building a
+    /// fresh `Resampler` per chunk resets the biquads and the fractional read
+    /// position, which puts a settling transient at every chunk boundary.
+    pub(crate) fn take(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.out)
+    }
+
     fn finish(mut self) -> Vec<f32> {
         // Emit the final sample so a short clip is not dropped entirely.
         if let Some(&last) = self.pending.last() {
@@ -152,7 +163,11 @@ impl Resampler {
 
 /// Downmixes an interleaved buffer to mono, reusing `mono` to avoid allocating
 /// per packet (a long file decodes into hundreds of thousands of packets).
-fn downmix_into(samples: &[f32], channels: usize, mono: &mut Vec<f32>) -> Result<(), String> {
+pub(crate) fn downmix_into(
+    samples: &[f32],
+    channels: usize,
+    mono: &mut Vec<f32>,
+) -> Result<(), String> {
     if channels == 0 {
         return Err("No audio channels".to_string());
     }
@@ -173,8 +188,18 @@ fn downmix_into(samples: &[f32], channels: usize, mono: &mut Vec<f32>) -> Result
     Ok(())
 }
 
+/// Streaming resampler to 16 kHz for live capture. `None` when the input is
+/// already at 16 kHz, so the caller can pass samples straight through.
+pub(crate) fn resampler_to_16k(from_rate: u32) -> Option<Resampler> {
+    if from_rate == 0 || from_rate == TARGET_RATE {
+        return None;
+    }
+    Some(Resampler::new(from_rate, TARGET_RATE))
+}
+
 /// Reads audio with Symphonia and returns mono f32 @ 16 kHz for whisper.cpp.
-pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
+/// `abort` is checked between packets so a batch cancel can stop a long decode.
+pub fn decode_file_to_mono_16k(path: &Path, abort: impl Fn() -> bool) -> Result<Vec<f32>, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
 
     let mut hint = Hint::new();
@@ -216,6 +241,9 @@ pub fn decode_file_to_mono_16k(path: &Path) -> Result<Vec<f32>, String> {
     let mut decoded_any = false;
 
     loop {
+        if abort() {
+            return Err("Cancelled.".to_string());
+        }
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
             // Clean end of stream.
@@ -326,7 +354,7 @@ mod tests {
             .collect();
         write_wav(&path, 2, src_rate, &frames);
 
-        let out = decode_file_to_mono_16k(&path).expect("decode");
+        let out = decode_file_to_mono_16k(&path, || false).expect("decode");
         let _ = std::fs::remove_file(&path);
 
         let expected = (f64::from(TARGET_RATE) * secs) as usize;
@@ -344,7 +372,9 @@ mod tests {
 
     #[test]
     fn missing_file_is_an_error() {
-        assert!(decode_file_to_mono_16k(std::path::Path::new("/no/such/file.wav")).is_err());
+        assert!(
+            decode_file_to_mono_16k(std::path::Path::new("/no/such/file.wav"), || false).is_err()
+        );
     }
 
     fn resample(input: &[f32], from: u32) -> Vec<f32> {

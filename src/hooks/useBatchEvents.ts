@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { MessageKey } from "../i18n";
 import type {
   BatchCompletePayload,
   JobError,
@@ -25,8 +26,16 @@ export interface BatchState {
   modelDownload: { pct: number; model: string } | null;
 }
 
-/** Subscribes to the backend's progress events for the lifetime of the app. */
-export function useBatchEvents(): BatchState {
+/**
+ * Subscribes to the backend's progress events for the lifetime of the app.
+ *
+ * `t` is a parameter rather than `useT()`: this hook runs in `App`, which is the
+ * component that *provides* the i18n context, so a `useContext` here would read
+ * the English default instead of the configured locale.
+ */
+export function useBatchEvents(
+  t: (key: MessageKey, params?: Record<string, string | number>) => string,
+): BatchState {
   const [jobs, setJobs] = useState<Record<string, JobRow>>({});
   const [processing, setProcessing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -34,6 +43,12 @@ export function useBatchEvents(): BatchState {
   const [statusMsg, setStatusMsg] = useState("");
   const [errors, setErrors] = useState<JobError[]>([]);
   const [modelDownload, setModelDownload] = useState<{ pct: number; model: string } | null>(null);
+  // The listeners are registered once for the app's lifetime, so the catalogue
+  // is read through a ref instead of being captured in the closure.
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   // The backend owns the running state; recover it so a reload cannot leave the
   // UI disabled behind a batch that already finished.
@@ -95,9 +110,10 @@ export function useBatchEvents(): BatchState {
           setProcessing(false);
           setCancelling(false);
           setModelDownload(null);
+          // `error` comes from the backend and stays in its own wording.
           if (e.payload.error) setStatusMsg(e.payload.error);
-          else if (e.payload.cancelled) setStatusMsg("Batch cancelled.");
-          else setStatusMsg("Batch complete.");
+          else if (e.payload.cancelled) setStatusMsg(tRef.current("msg.batchCancelled"));
+          else setStatusMsg(tRef.current("msg.batchComplete"));
         }),
       );
 

@@ -1,11 +1,10 @@
-import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileAudio2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AboutDialog } from "./components/AboutDialog";
 import { AppToolbar } from "./components/AppToolbar";
+import { DictationView } from "./components/DictationView";
 import { ErrorPanel } from "./components/ErrorPanel";
 import { PodcastDialog } from "./components/PodcastDialog";
 import { QueueTable } from "./components/QueueTable";
@@ -14,17 +13,44 @@ import { StatusBar } from "./components/StatusBar";
 import { defaultConfig } from "./defaults";
 import { useBatchEvents } from "./hooks/useBatchEvents";
 import { useConfigStore } from "./hooks/useConfigStore";
+import { useDictationEvents } from "./hooks/useDictationEvents";
+import { useHotkeys } from "./hooks/useHotkeys";
 import { useNativeDrop } from "./hooks/useNativeDrop";
 import { useTheme } from "./hooks/useTheme";
+import { I18nContext, useI18nValue } from "./i18n/I18nProvider";
 import { rememberPodcastRecent } from "./lib/configStore";
+import { summaryWouldRun } from "./lib/llmProviders";
 import { toMsg } from "./lib/jobs";
+import { itemsToPersist, parseSavedQueue } from "./lib/queuePersist";
 import { AUDIO_EXTENSIONS, localItem } from "./lib/queue";
-import type { AppConfig, EpisodeInfo, PodcastRecent, QueueItem, WhisperModelInfo } from "./types";
+import type {
+  AppConfig,
+  AppMode,
+  EpisodeInfo,
+  PodcastRecent,
+  QueueItem,
+  WhisperModelInfo,
+} from "./types";
 
 export default function App() {
   const [themeMode, setThemeMode] = useTheme();
-  const { config, setConfig, persist, revert, ready: storeReady, loadError } = useConfigStore();
-  const batch = useBatchEvents();
+  const {
+    config,
+    saved: savedConfig,
+    setConfig,
+    persist,
+    revert,
+    loadQueue,
+    saveQueue,
+    ready: storeReady,
+    loadError,
+  } = useConfigStore();
+  // Before `useBatchEvents`: that hook needs `t`, and App is the component that
+  // provides the context, so it cannot read it back through `useT`.
+  const i18n = useI18nValue(config.uiLanguage);
+  const { t, tn } = i18n;
+
+  const batch = useBatchEvents(t);
   const {
     jobs,
     setJobs,
@@ -41,13 +67,18 @@ export default function App() {
     modelDownload,
   } = batch;
 
+  const dictation = useDictationEvents(setStatusMsg);
+  const dictating = dictation.running;
+
   const [items, setItems] = useState<QueueItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<AppMode>("queue");
+  const [queueHydrated, setQueueHydrated] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [aboutVersion, setAboutVersion] = useState("");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">(
+    "idle",
+  );
   const [saveError, setSaveError] = useState("");
 
   const [podcastOpen, setPodcastOpen] = useState(false);
@@ -61,20 +92,44 @@ export default function App() {
   const [modelInfos, setModelInfos] = useState<WhisperModelInfo[] | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [vulkanAvailable, setVulkanAvailable] = useState<boolean | null>(null);
-  const [detectedSystemSummaryLang, setDetectedSystemSummaryLang] = useState("");
+  const [detectedSystemSummaryLang, setDetectedSystemSummaryLang] =
+    useState("");
 
   const saveTimerRef = useRef<number | undefined>(undefined);
   const processingRef = useRef(false);
+  const dictatingRef = useRef(false);
+  /** Mirrors `items` so `addItems` can dedupe without a state updater. */
+  const itemsRef = useRef<QueueItem[]>([]);
+  /**
+   * Effects that only use `t` on an error path read it here instead of listing
+   * it as a dependency. The queue-restore effect in particular must run exactly
+   * once: re-running it reloads the queue from disk and would discard anything
+   * added since.
+   */
+  const tRef = useRef(t);
+
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
 
   useEffect(() => {
     processingRef.current = processing;
   }, [processing]);
 
   useEffect(() => {
-    if (loadError) setStatusMsg(`Settings could not be loaded (${loadError}). Using defaults.`);
-  }, [loadError, setStatusMsg]);
+    dictatingRef.current = dictating;
+  }, [dictating]);
+
+  useEffect(() => {
+    if (loadError)
+      setStatusMsg(t("msg.settingsLoadFailed", { error: loadError }));
+  }, [loadError, setStatusMsg, t]);
 
   useEffect(() => () => window.clearTimeout(saveTimerRef.current), []);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   useEffect(() => {
     void invoke<{ available: boolean }>("vulkan_status")
@@ -82,12 +137,57 @@ export default function App() {
       .catch(() => setVulkanAvailable(null));
   }, []);
 
+  useEffect(() => {
+    if (!storeReady) return;
+    let cancelled = false;
+    void (async () => {
+      let loaded = false;
+      try {
+        const restored = parseSavedQueue(await loadQueue());
+        if (cancelled) return;
+        if (restored.length > 0) {
+          itemsRef.current = restored;
+          setItems(restored);
+          setJobs(
+            Object.fromEntries(
+              restored.map((item) => [
+                item.id,
+                {
+                  path: item.id,
+                  displayName: item.displayName,
+                  stage: "queued",
+                },
+              ]),
+            ),
+          );
+        }
+        loaded = true;
+      } catch (e) {
+        if (!cancelled)
+          setStatusMsg(tRef.current("msg.queueRestoreFailed", { error: toMsg(e) }));
+      } finally {
+        if (!cancelled && loaded) setQueueHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [storeReady, loadQueue, setJobs, setStatusMsg]);
+
+  useEffect(() => {
+    if (!queueHydrated) return;
+    const timer = window.setTimeout(() => {
+      void saveQueue(itemsToPersist(items, jobs));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [items, jobs, queueHydrated, saveQueue]);
+
   const refreshModelInfos = useCallback(async () => {
     try {
       setModelInfos(await invoke<WhisperModelInfo[]>("list_whisper_models"));
     } catch (e) {
       setModelInfos([]);
-      setStatusMsg(`Whisper model list unavailable: ${toMsg(e)}`);
+      setStatusMsg(tRef.current("msg.modelListUnavailable", { error: toMsg(e) }));
     }
   }, [setStatusMsg]);
 
@@ -108,9 +208,13 @@ export default function App() {
         setModelInfos(models.value);
       } else {
         setModelInfos([]);
-        setStatusMsg(`Whisper model list unavailable: ${toMsg(models.reason)}`);
+        setStatusMsg(
+          tRef.current("msg.modelListUnavailable", { error: toMsg(models.reason) }),
+        );
       }
-      setDetectedSystemSummaryLang(lang.status === "fulfilled" ? lang.value : "");
+      setDetectedSystemSummaryLang(
+        lang.status === "fulfilled" ? lang.value : "",
+      );
     })();
 
     return () => {
@@ -118,36 +222,48 @@ export default function App() {
     };
   }, [settingsOpen, setStatusMsg]);
 
-  useEffect(() => {
-    if (!aboutOpen) return;
-    void getVersion()
-      .then(setAboutVersion)
-      .catch(() => setAboutVersion("—"));
-  }, [aboutOpen]);
 
-  /** Append new items (deduplicated by id) and queue rows for them. */
+  /** Append new items (deduplicated by id) and queue rows for them.
+   *
+   *  Dedupe and the IPC call run outside the state updaters: React may invoke an
+   *  updater more than once (StrictMode does so in development), which sent the
+   *  same file to `append_to_batch` twice. */
   const addItems = useCallback(
     (added: QueueItem[]) => {
-      setItems((prev) => {
-        const seen = new Set(prev.map((i) => i.id));
-        const fresh = added.filter((i) => !seen.has(i.id));
-        if (fresh.length === 0) return prev;
-        setJobs((prevJobs) => {
-          const next = { ...prevJobs };
-          for (const item of fresh) {
-            next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
-          }
-          return next;
-        });
-        return [...prev, ...fresh];
+      const seen = new Set(itemsRef.current.map((i) => i.id));
+      const fresh: QueueItem[] = [];
+      for (const item of added) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        fresh.push(item);
+      }
+      if (fresh.length === 0) return;
+
+      itemsRef.current = [...itemsRef.current, ...fresh];
+      setItems(itemsRef.current);
+      setJobs((prevJobs) => {
+        const next = { ...prevJobs };
+        for (const item of fresh) {
+          next[item.id] = {
+            path: item.id,
+            displayName: item.displayName,
+            stage: "queued",
+          };
+        }
+        return next;
       });
+      if (processingRef.current) {
+        void invoke("append_to_batch", { items: fresh }).catch((e) =>
+          setStatusMsg(toMsg(e)),
+        );
+      }
       // A finished batch's tally no longer describes the queue.
       setOverall((cur) => (processingRef.current ? cur : null));
     },
-    [setJobs, setOverall],
+    [setJobs, setOverall, setStatusMsg],
   );
 
-  const dragActive = useNativeDrop(addItems, setStatusMsg);
+  const dragActive = useNativeDrop(addItems, setStatusMsg, t);
 
   const pickFiles = async () => {
     try {
@@ -159,9 +275,13 @@ export default function App() {
       if (!sel) return;
       const list = Array.isArray(sel) ? sel : [sel];
       addItems(list.map(localItem));
-      setStatusMsg(`${list.length} file(s) added.`);
+      setStatusMsg(
+        processingRef.current
+          ? t("msg.filesAddedRunning", { count: list.length })
+          : t("msg.filesAdded", { count: list.length }),
+      );
     } catch (e) {
-      setStatusMsg(`Could not open the file picker: ${toMsg(e)}`);
+      setStatusMsg(t("msg.filePickerFailed", { error: toMsg(e) }));
     }
   };
 
@@ -180,7 +300,7 @@ export default function App() {
       });
       if (typeof dir === "string" && dir) setPodcastDir(dir);
     } catch (e) {
-      setPodcastError(`Could not open the folder picker: ${toMsg(e)}`);
+      setPodcastError(t("msg.folderPickerFailed", { error: toMsg(e) }));
     }
   };
 
@@ -190,7 +310,9 @@ export default function App() {
     try {
       const url = feedUrl.trim();
       const dir = podcastDir.trim();
-      const episodes = await invoke<EpisodeInfo[]>("fetch_podcast_feed", { url });
+      const episodes = await invoke<EpisodeInfo[]>("fetch_podcast_feed", {
+        url,
+      });
       addItems(
         episodes.map((ep) => ({
           id: ep.audioUrl,
@@ -207,9 +329,11 @@ export default function App() {
         })),
       );
       setPodcastOpen(false);
-      setStatusMsg(`${episodes.length} episode(s) added.`);
+      setStatusMsg(t("msg.episodesAdded", { count: episodes.length }));
       // Updater form: `config` here predates the feed request above.
-      await persist((prev) => rememberPodcastRecent(prev, url, dir, episodes[0]?.feedTitle));
+      await persist((prev) =>
+        rememberPodcastRecent(prev, url, dir, episodes[0]?.feedTitle),
+      );
     } catch (e) {
       setPodcastError(toMsg(e));
     } finally {
@@ -244,13 +368,16 @@ export default function App() {
   const removeSelected = () => {
     const count = selected.size;
     if (count === 0) return;
-    setItems((prev) => prev.filter((i) => !selected.has(i.id)));
+    itemsRef.current = itemsRef.current.filter((i) => !selected.has(i.id));
+    setItems(itemsRef.current);
     setJobs((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([k]) => !selected.has(k))),
+      Object.fromEntries(
+        Object.entries(prev).filter(([k]) => !selected.has(k)),
+      ),
     );
     setSelected(new Set());
     setOverall(null);
-    setStatusMsg(`${count} entr${count === 1 ? "y" : "ies"} removed from the list.`);
+    setStatusMsg(tn("msg.entriesRemovedOne", "msg.entriesRemovedMany", count));
   };
 
   const openResult = async (path: string) => {
@@ -260,7 +387,7 @@ export default function App() {
       try {
         await revealItemInDir(path);
       } catch (e) {
-        setStatusMsg(`Could not open ${path}: ${toMsg(e)}`);
+        setStatusMsg(t("msg.openFailed", { path, error: toMsg(e) }));
       }
     }
   };
@@ -269,27 +396,32 @@ export default function App() {
     try {
       await revealItemInDir(path);
     } catch (e) {
-      setStatusMsg(`Could not open the folder: ${toMsg(e)}`);
+      setStatusMsg(t("msg.openFolderFailed", { error: toMsg(e) }));
     }
   };
 
-  const hasApiKey = config.apiKey.trim() !== "";
-  // The summary only runs with a key; without one the transcript must carry the output.
-  const outputInvalid = !(config.includeSummary && hasApiKey) && !config.includeTranscript;
+  // The summary needs a key, or a model server on this machine; without either
+  // the transcript must carry the output. Same rule as `summary_enabled` in Rust.
+  const outputInvalid = !summaryWouldRun(config) && !config.includeTranscript;
 
   const start = async () => {
     if (!storeReady) {
-      setStatusMsg("Settings are still loading…");
+      setStatusMsg(t("msg.settingsLoading"));
+      return;
+    }
+    if (dictatingRef.current) {
+      setStatusMsg(t("msg.stopDictationFirst"));
       return;
     }
     if (items.length === 0) {
-      setStatusMsg("No entries in queue.");
+      setStatusMsg(t("msg.emptyQueue"));
       return;
     }
     // Selection scopes the batch; with nothing checked, process the whole queue.
-    const toProcess = selected.size > 0 ? items.filter((i) => selected.has(i.id)) : items;
+    const toProcess =
+      selected.size > 0 ? items.filter((i) => selected.has(i.id)) : items;
     if (toProcess.length === 0) {
-      setStatusMsg("No entries selected.");
+      setStatusMsg(t("msg.noSelection"));
       return;
     }
 
@@ -303,7 +435,11 @@ export default function App() {
     setJobs((prev) => {
       const next = { ...prev };
       for (const item of toProcess) {
-        next[item.id] = { path: item.id, displayName: item.displayName, stage: "queued" };
+        next[item.id] = {
+          path: item.id,
+          displayName: item.displayName,
+          stage: "queued",
+        };
       }
       return next;
     });
@@ -323,22 +459,52 @@ export default function App() {
     setCancelling(true);
     try {
       await invoke("cancel_transcription");
-      setStatusMsg("Cancelling — finishing the current step…");
+      setStatusMsg(t("msg.cancelRequested"));
     } catch (e) {
       setCancelling(false);
       setStatusMsg(toMsg(e));
     }
   };
 
-  const toggleMdOutput = (key: "includeMeta" | "includeSummary" | "includeTranscript") => {
+  const startDictation = async () => {
+    if (processingRef.current) {
+      setStatusMsg(t("msg.stopBatchFirst"));
+      return;
+    }
+    try {
+      // `dictating` flips on the `dictation_status` event, not here: the backend
+      // is the owner, and guessing locally is what let the two drift apart.
+      await invoke("start_dictation", { config });
+    } catch (e) {
+      setStatusMsg(toMsg(e));
+    }
+  };
+
+  const stopDictation = () => {
+    invoke("stop_dictation").catch((e) => setStatusMsg(toMsg(e)));
+  };
+
+  const switchMode = (next: AppMode) => {
+    if (next === "dictation" && processingRef.current) {
+      setStatusMsg(t("msg.stopBatchFirst"));
+      return;
+    }
+    if (next === "queue" && dictatingRef.current) {
+      stopDictation();
+    }
+    setMode(next);
+  };
+
+  const toggleMdOutput = (
+    key: "includeMeta" | "includeSummary" | "includeTranscript",
+  ) => {
     const next = { ...config, [key]: !config[key] };
     if (key !== "includeMeta") {
-      const summaryWouldRun = next.includeSummary && next.apiKey.trim() !== "";
-      if (!summaryWouldRun && !next.includeTranscript) {
+      if (!summaryWouldRun(next) && !next.includeTranscript) {
         setStatusMsg(
           next.includeSummary
-            ? "Need an API key or Transcript — otherwise the Markdown would be empty."
-            : "Enable at least Summary or Transcript — otherwise the Markdown would be empty.",
+            ? t("msg.needKeyOrTranscript")
+            : t("msg.needSummaryOrTranscript"),
         );
         return;
       }
@@ -353,22 +519,23 @@ export default function App() {
       await refreshModelInfos();
     } catch (e) {
       // Shown in the drawer: the footer status line sits behind the overlay.
-      setSaveError(`Could not clear the cache: ${toMsg(e)}`);
+      setSaveError(t("msg.clearCacheFailed", { error: toMsg(e) }));
     } finally {
       setClearingCache(false);
     }
   };
 
-  const pickModelFile = async () => {
+  const pickModelFile = async (field: "whisperModel" | "dictationModel") => {
     try {
       const file = await open({
         title: "Whisper model file",
         multiple: false,
         filters: [{ name: "Whisper model", extensions: ["bin", "gguf"] }],
       });
-      if (typeof file === "string" && file) setConfig({ ...config, whisperModel: file });
+      if (typeof file === "string" && file)
+        setConfig({ ...config, [field]: file });
     } catch (e) {
-      setSaveError(`Could not open the file picker: ${toMsg(e)}`);
+      setSaveError(t("msg.filePickerFailed", { error: toMsg(e) }));
     }
   };
 
@@ -398,113 +565,167 @@ export default function App() {
     }
   };
 
-  return (
-    <div className="app-shell">
-      <AppToolbar
-        config={config}
-        storeReady={storeReady}
-        processing={processing}
-        cancelling={cancelling}
-        itemCount={items.length}
-        selectedCount={selected.size}
-        outputInvalid={outputInvalid}
-        onPickFiles={pickFiles}
-        onOpenPodcast={openPodcast}
-        onRemoveSelected={removeSelected}
-        onStart={() => void start()}
-        onCancel={() => void cancelProcessing()}
-        onToggleMd={toggleMdOutput}
-        onToggleDeleteSource={() =>
-          void persist((prev) => ({
-            ...prev,
-            deleteSourceAfterSuccess: !prev.deleteSourceAfterSuccess,
-          }))
+  const dialogOpen = settingsOpen || podcastOpen;
+
+  useHotkeys(
+    {
+      onStartOrToggleRecord: () => {
+        if (mode === "dictation") {
+          if (dictatingRef.current) stopDictation();
+          else void startDictation();
+          return;
         }
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenAbout={() => setAboutOpen(true)}
-      />
+        if (!processingRef.current) void start();
+      },
+      onCancelOrStop: () => {
+        if (dictatingRef.current) {
+          stopDictation();
+          return;
+        }
+        if (processingRef.current) void cancelProcessing();
+      },
+      onPickFiles: () => {
+        if (dictatingRef.current) {
+          setStatusMsg(t("msg.stopDictationBeforeFiles"));
+          return;
+        }
+        setMode("queue");
+        void pickFiles();
+      },
+      onOpenSettings: () => setSettingsOpen(true),
+      onQueueMode: () => switchMode("queue"),
+      onDictationMode: () => switchMode("dictation"),
+    },
+    !dialogOpen,
+  );
 
-      {dragActive ? (
-        <div className="drop-overlay" aria-hidden>
-          <div className="drop-overlay-inner">
-            <FileAudio2 size={40} aria-hidden />
-            <p>Drop audio files to add them to the queue</p>
-          </div>
-        </div>
-      ) : null}
-
-      <ErrorPanel errors={errors} onDismiss={() => setErrors([])} />
-
-      <main className="content">
-        <QueueTable
-          items={items}
-          jobs={jobs}
-          selected={selected}
-          processing={processing}
-          onToggle={toggleSelect}
-          onToggleAll={toggleSelectAll}
-          onOpenResult={(p) => void openResult(p)}
-          onRevealResult={(p) => void revealResult(p)}
-        />
-        <StatusBar
-          itemCount={items.length}
-          overall={overall}
-          modelDownload={modelDownload}
-          processing={processing}
-          cancelling={cancelling}
-          statusMsg={statusMsg}
-        />
-      </main>
-
-      {podcastOpen ? (
-        <PodcastDialog
-          feedUrl={feedUrl}
-          onFeedUrlChange={setFeedUrl}
-          outputDir={podcastDir}
-          onOutputDirChange={setPodcastDir}
-          onChooseDir={() => void choosePodcastDir()}
-          recents={config.podcastRecents}
-          onApplyRecent={applyPodcastRecent}
-          onRemoveRecent={removePodcastRecent}
-          busy={feedBusy}
-          error={podcastError}
-          onSubmit={() => void addPodcast()}
-          onClose={() => setPodcastOpen(false)}
-        />
-      ) : null}
-
-      {settingsOpen ? (
-        <SettingsDrawer
+  return (
+    <I18nContext.Provider value={i18n}>
+      <div className="app-shell">
+        <AppToolbar
           config={config}
-          onConfigChange={setConfig}
           storeReady={storeReady}
-          saveState={saveState}
-          saveError={saveError}
-          onSave={() => void handleSaveSettings()}
-          onResetDefaults={() =>
-            // Recent feeds are history, not a setting.
-            setConfig((prev: AppConfig) => ({
-              ...defaultConfig(),
-              podcastRecents: prev.podcastRecents,
-              podcastOutputDir: prev.podcastOutputDir,
+          mode={mode}
+          processing={processing}
+          dictating={dictating}
+          cancelling={cancelling}
+          itemCount={items.length}
+          selectedCount={selected.size}
+          outputInvalid={outputInvalid}
+          onModeChange={switchMode}
+          onPickFiles={() => void pickFiles()}
+          onOpenPodcast={openPodcast}
+          onRemoveSelected={removeSelected}
+          onStart={() => void start()}
+          onCancel={() => void cancelProcessing()}
+          onToggleMd={toggleMdOutput}
+          onToggleDeleteSource={() =>
+            void persist((prev) => ({
+              ...prev,
+              deleteSourceAfterSuccess: !prev.deleteSourceAfterSuccess,
             }))
           }
-          onClose={closeSettings}
-          modelInfos={modelInfos ?? []}
-          modelsLoading={modelInfos === null}
-          clearingCache={clearingCache}
-          onClearCache={() => void clearCache()}
-          onPickModelFile={() => void pickModelFile()}
-          detectedSystemSummaryLang={detectedSystemSummaryLang}
-          vulkanAvailable={vulkanAvailable}
-          themeMode={themeMode}
-          onThemeChange={setThemeMode}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
-      ) : null}
 
-      {aboutOpen ? (
-        <AboutDialog version={aboutVersion} onClose={() => setAboutOpen(false)} />
-      ) : null}
-    </div>
+        {dragActive && mode === "queue" ? (
+          <div className="drop-overlay" aria-hidden>
+            <div className="drop-overlay-inner">
+              <FileAudio2 size={40} aria-hidden />
+              <p>{t("queue.dropHint")}</p>
+            </div>
+          </div>
+        ) : null}
+
+        <ErrorPanel errors={errors} onDismiss={() => setErrors([])} />
+
+        <main className="content">
+          {mode === "dictation" ? (
+            <DictationView
+              config={config}
+              storeReady={storeReady}
+              processing={processing}
+              dictation={dictation}
+              onStart={() => void startDictation()}
+              onStop={stopDictation}
+              onMicrophoneChange={(name) =>
+                void persist((prev) => ({ ...prev, microphoneName: name }))
+              }
+              onStatus={setStatusMsg}
+            />
+          ) : (
+            <QueueTable
+              items={items}
+              jobs={jobs}
+              selected={selected}
+              processing={processing}
+              onToggle={toggleSelect}
+              onToggleAll={toggleSelectAll}
+              onOpenResult={(p) => void openResult(p)}
+              onRevealResult={(p) => void revealResult(p)}
+            />
+          )}
+          <StatusBar
+            itemCount={items.length}
+            overall={overall}
+            modelDownload={modelDownload}
+            processing={processing || dictating}
+            cancelling={cancelling}
+            statusMsg={statusMsg}
+          />
+        </main>
+
+        {podcastOpen ? (
+          <PodcastDialog
+            feedUrl={feedUrl}
+            onFeedUrlChange={setFeedUrl}
+            outputDir={podcastDir}
+            onOutputDirChange={setPodcastDir}
+            onChooseDir={() => void choosePodcastDir()}
+            recents={config.podcastRecents}
+            onApplyRecent={applyPodcastRecent}
+            onRemoveRecent={removePodcastRecent}
+            busy={feedBusy}
+            error={podcastError}
+            onSubmit={() => void addPodcast()}
+            onClose={() => setPodcastOpen(false)}
+          />
+        ) : null}
+
+        {settingsOpen ? (
+          <SettingsDrawer
+            config={config}
+            savedConfig={savedConfig}
+            onConfigChange={setConfig}
+            storeReady={storeReady}
+            saveState={saveState}
+            saveError={saveError}
+            onSave={() => void handleSaveSettings()}
+            onResetDefaults={() =>
+              // Recent feeds are history, not a setting.
+              setConfig((prev: AppConfig) => ({
+                ...defaultConfig(),
+                podcastRecents: prev.podcastRecents,
+                podcastOutputDir: prev.podcastOutputDir,
+              }))
+            }
+            onClose={closeSettings}
+            modelInfos={modelInfos ?? []}
+            modelsLoading={modelInfos === null}
+            clearingCache={clearingCache}
+            onClearCache={() => void clearCache()}
+            onPickWhisperModelFile={() => void pickModelFile("whisperModel")}
+            onPickDictationModelFile={() =>
+              void pickModelFile("dictationModel")
+            }
+            detectedSystemSummaryLang={detectedSystemSummaryLang}
+            vulkanAvailable={vulkanAvailable}
+            themeMode={themeMode}
+            onThemeChange={setThemeMode}
+          />
+        ) : null}
+
+      </div>
+    </I18nContext.Provider>
   );
 }

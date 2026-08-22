@@ -7,6 +7,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-22
+
+### Added
+
+- **OpenRouter** (and a Custom option) next to Deepseek in Settings. Provider choice fills the base URL; OpenRouter lists chat models for a dropdown. **Verify** checks the API key.
+- **Speaker labels** after Whisper (`pyannote-rs` / ONNX). Optional; models download into `~/.cache/voxmd/diarize/` on first use. Transcript lines become `[HH:MM:SS] **Speaker N:** …`. A failed diarization keeps the unlabeled transcript. Clustering is offline (average-linkage on CAM++ embeddings); `maxSpeakers` 0 = auto (at most 8), 1–8 = exact count.
+- **Dictation mode** (Ctrl+2): live microphone capture with its own Whisper model, silence-based commits, input level meter. **Improve** and **Translate** run on the dictation text when an API key is set; keep or discard the suggestion.
+- **Queue persistence**: unfinished entries are stored with settings and restored on launch. Completed exports are not kept.
+- **Append while running**: Files, drag-and-drop and Podcast add to a live batch (`append_to_batch`). Overall progress re-reads the growing total.
+- **Prevent sleep** during a batch (`keepawake`). Default on; a failure is logged, not fatal.
+- **Keyboard shortcuts**: F5, Esc, Ctrl+O, Ctrl+,, Ctrl+1/2. Ignored while typing; open dialogs keep Escape.
+- Container formats **MKA, MKV, AIFF/AIF, CAF** (Symphonia). `.mov` / `.avi` / `.wmv` / `.mpeg` stay out.
+- **Interface language**: English, German, French, Italian, Spanish, or follow the system. Under Appearance. Messages coming from the transcription backend stay English.
+- **Nine more LLM providers**: OpenAI, Anthropic, Google Gemini, Mistral, Groq, xAI, Together AI, Ollama and LM Studio join DeepSeek, OpenRouter and Custom. Each fills its own base URL, and the model dropdown populates from the provider's own catalogue.
+- Local model servers (Ollama, LM Studio, any `localhost` endpoint) work **without an API key** — Verify, the model list, Improve/Translate and the summary all accept a blank key there.
+
+### Changed
+
+- **Settings reworked around finding things.** The drawer is up to 1024 px wide with a search field that matches translated labels *and* technical keywords ("vulkan" finds the GPU row, "schlussel" finds "Schlüssel"), a rail of four sections — Appearance, Transcription, Summary, Dictation — each showing its current value, a dot on sections carrying an unsaved edit, and a count in the footer. Speakers moved into Transcription; nothing hides behind an "Advanced" disclosure any more. Replaces four sections stacked in a 440 px column.
+- **About lives in Settings.** The separate About dialog and its toolbar button are gone; it is the last rail entry, below a divider.
+- Keyboard shortcuts are a table instead of one run-on sentence.
+- Whisper loop pulls from a process-wide deque instead of a fixed `Vec`, so the batch can grow. Channel capacity remains 1.
+- Linux CI/release images install cmake, ALSA, D-Bus, OpenSSL headers and g++ (needed by `pyannote-rs` / `cpal` / `keepawake`).
+- `ort` is pinned to `=2.0.0-rc.10` so `pyannote-rs` 0.3.4 compiles (later rcs pull a second `ndarray` and break Send/Sync).
+- Summaries cover the full transcript: one LLM call up to ~120k characters, then map-reduce in at most 16 parts. The 50k truncation note is gone.
+- Speaker diarization no longer uses pyannote-rs `EmbeddingManager` (which froze each cluster on its first embedding and invented extra speakers).
+- Diarization holds sample index ranges instead of copying every speech segment, and pads only the trailing window — roughly 460 MB less peak memory on a two-hour episode.
+- Cluster distances use the Lance-Williams recurrence (exact for average linkage) instead of re-summing every raw pair per merge.
+- The microphone level meter is emitted from the polling loop instead of the realtime audio callback.
+- Commands that touch the filesystem, enumerate devices or join a thread run off the main thread.
+- Speaker-model download reports progress like the Whisper model download.
+- `job_progress` carries `outputPath`, so the UI no longer recovers the written file by parsing the status text.
+- **ONNX Runtime is no longer linked into the binary.** It is downloaded on the first diarized run into `~/.cache/voxmd/diarize/`, beside the two models that use it, with its published SHA-256 verified. The CPU build drops from 39.4 MB to 19.1 MB and the released Vulkan build from 75.9 MB to 55.6 MB; nobody who leaves speaker labels off pays for the runtime any more. Enabling them costs about 40 MB of extra download on Linux (more on Windows and macOS) once.
+- Clean builds no longer fetch a 94 MB static onnxruntime archive they never link.
+
+### Fixed
+
+- Two-person interviews were labelled with many speakers because short/noisy first embeddings never updated.
+- **Speaker timestamps drifted on long recordings.** The segmentation frame counter ran across the 10 s window boundaries, losing 970 samples (~61 ms) per window — about 22 s over an hour — which shifted every later speaker turn and fed the embedder the wrong audio.
+- **Stopping dictation dropped the tail.** The final buffer (up to 25 s) was only transcribed when `STOP` was unset, which a normal stop always sets.
+- Leaving dictation mode with Ctrl+1 left the app believing dictation was still running, blocking the batch Start button until restart.
+- A file added at the exact moment a batch drained could be acknowledged by `append_to_batch` and then discarded unprocessed.
+- Adding files to a running batch could enqueue them twice.
+- Cancelling during an episode download or between download and Whisper left the row stuck on its last stage.
+- Episodes skipped because their Markdown already exists are no longer restored as "waiting" on every start.
+- Summaries of very long transcripts no longer fail outright when a map-reduce part still exceeds the model's context; the part size halves and retries.
+- Reasoning models that reject `max_tokens` / `temperature` (reachable via OpenRouter) now get a retry with provider defaults.
+- Improve/Translate no longer truncate long dictations at the summary's fixed 8192-token budget.
+- Live dictation resampled each 1.2 s chunk with a fresh resampler, putting a filter transient at every chunk boundary.
+- The `.deb` now declares `libasound2` and `libdbus-1-3`, which `cpal` and `keepawake` link against.
+- Starting a batch and starting dictation could both claim a `WhisperContext` in a narrow window.
+- A summary configured against a local model server was skipped in silence, because the check demanded a non-empty API key.
+
 ## [1.0.8] - 2026-08-03
 
 ### Added
