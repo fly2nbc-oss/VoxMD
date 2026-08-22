@@ -30,35 +30,80 @@ pub struct ModelInfo {
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("voxmd")
-        .join("whisper")
+    crate::paths::models_dir()
 }
 
-/// Deletes all cached model files from the cache directory.
+/// Every file the app downloads into [`cache_dir`]: Whisper weights, the two
+/// pyannote ONNX models and the ONNX Runtime library.
+///
+/// An explicit list, not "everything in the directory". The location is
+/// user-overridable (`VOXMD_MODELS_DIR`), and deleting unknown files out of a
+/// directory someone pointed at their own data would be unforgivable.
+pub fn managed_files() -> Vec<String> {
+    let mut names: Vec<String> = MODELS.iter().map(|(_, f, _)| f.to_string()).collect();
+    names.extend(crate::diarize::MODEL_FILES.iter().map(|f| f.to_string()));
+    if let Some(lib) = crate::onnx_runtime::library_file_name() {
+        names.push(lib.to_string());
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheStats {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// How much disk the downloaded models occupy right now.
+pub fn cache_stats() -> CacheStats {
+    let dir = cache_dir();
+    let mut stats = CacheStats::default();
+    for name in managed_files() {
+        if let Ok(meta) = std::fs::metadata(dir.join(name)) {
+            if meta.is_file() && meta.len() > 0 {
+                stats.files += 1;
+                stats.bytes += meta.len();
+            }
+        }
+    }
+    stats
+}
+
+/// Deletes every downloaded model — Whisper *and* the diarization files.
 ///
 /// Continues after individual delete failures so a single locked file does not
-/// leave the rest of the cache behind; reports a combined error if any failed.
+/// leave the rest behind; reports a combined error if any failed. Interrupted
+/// downloads (`.tmp`, `.part`, `.download`) go too, since they are ours and are
+/// worthless once their target is gone.
 pub fn clear_model_cache() -> Result<(), String> {
     let dir = cache_dir();
     if !dir.exists() {
         return Ok(());
     }
+    let mut targets: Vec<PathBuf> = managed_files().into_iter().map(|n| dir.join(n)).collect();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let leftover = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "tmp" | "part" | "download"));
+            if leftover && p.is_file() {
+                targets.push(p);
+            }
+        }
+    }
+
     let mut errors = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| format!("Read cache dir: {e}"))? {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                errors.push(format!("Dir entry: {e}"));
-                continue;
-            }
-        };
-        let p = entry.path();
-        if p.is_file() {
-            if let Err(e) = std::fs::remove_file(&p) {
-                errors.push(format!("Delete {}: {e}", p.display()));
-            }
+    for path in targets {
+        if !path.is_file() {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(&path) {
+            errors.push(format!("Delete {}: {e}", path.display()));
         }
     }
     if errors.is_empty() {
@@ -268,15 +313,70 @@ mod tests {
     #[test]
     fn download_and_load_share_one_directory() {
         let dir = cache_dir();
-        assert!(
-            dir.ends_with("voxmd/whisper") || dir.ends_with("voxmd\\whisper"),
-            "{dir:?}"
-        );
+        assert_eq!(dir, crate::paths::models_dir());
         for (name, file, _) in MODELS {
             let resolved = dir.join(filename_for(name).expect("preset resolves"));
             assert_eq!(resolved.parent(), Some(dir.as_path()));
             assert_eq!(resolved.file_name().and_then(|f| f.to_str()), Some(*file));
         }
+    }
+
+    /// Clearing must reach every download, and nothing else. An entry missing
+    /// from this list survives "free up space" and quietly keeps its gigabytes.
+    #[test]
+    fn managed_files_cover_every_download() {
+        let files = managed_files();
+        for (_, whisper, _) in MODELS {
+            assert!(files.contains(&whisper.to_string()), "{whisper}");
+        }
+        for onnx in crate::diarize::MODEL_FILES {
+            assert!(files.contains(&onnx.to_string()), "{onnx}");
+        }
+        if let Some(lib) = crate::onnx_runtime::library_file_name() {
+            assert!(files.contains(&lib.to_string()), "{lib}");
+        }
+        // Deduped: `turbo` and `large-v3-turbo` share one file.
+        let mut sorted = files.clone();
+        sorted.dedup();
+        assert_eq!(sorted.len(), files.len());
+        assert!(files.iter().all(|f| !f.is_empty()));
+    }
+
+    /// Counting and clearing must agree, or "free up space" reports a size it
+    /// then fails to reclaim.
+    #[test]
+    fn stats_and_clearing_agree_on_a_temp_directory() {
+        let dir = std::env::temp_dir().join(format!("voxmd-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let managed = managed_files();
+        std::fs::write(dir.join(&managed[0]), vec![0u8; 2048]).unwrap();
+        std::fs::write(dir.join(&managed[1]), vec![0u8; 1024]).unwrap();
+        std::fs::write(dir.join("ggml-small.bin.part"), vec![0u8; 16]).unwrap();
+        // Not ours: must survive, even here.
+        std::fs::write(dir.join("notes.txt"), b"keep me").unwrap();
+
+        let counted: Vec<_> = managed
+            .iter()
+            .filter(|n| dir.join(n).is_file())
+            .cloned()
+            .collect();
+        assert_eq!(counted.len(), 2);
+        let bytes: u64 = counted
+            .iter()
+            .map(|n| std::fs::metadata(dir.join(n)).unwrap().len())
+            .sum();
+        assert_eq!(bytes, 3072);
+
+        for name in &counted {
+            std::fs::remove_file(dir.join(name)).unwrap();
+        }
+        assert!(
+            dir.join("notes.txt").is_file(),
+            "unrelated file was deleted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -95,8 +95,14 @@ fn unsupported() -> String {
     )
 }
 
-/// Where the shared library lives. `dir` is the diarization cache directory, so
-/// the library sits beside the models that use it.
+/// File name of the shared library on this target, or `None` where upstream
+/// publishes no build. Used for cache accounting as well as loading.
+pub fn library_file_name() -> Option<&'static str> {
+    dist().map(|d| d.file_name)
+}
+
+/// Where the shared library lives. `dir` is the model directory, so the library
+/// sits beside the models that use it.
 pub fn library_path(dir: &Path) -> Result<PathBuf, String> {
     let dist = dist().ok_or_else(unsupported)?;
     Ok(dir.join(dist.file_name))

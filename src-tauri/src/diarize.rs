@@ -23,17 +23,43 @@ const EMB_FILE: &str = "wespeaker_en_voxceleb_CAM++.onnx";
 const AUTO_SPEAKER_CAP: usize = MAX_SPEAKERS_CAP as usize;
 const FRAME_SIZE: usize = 270;
 const FRAME_START: usize = 721;
+/// segmentation-3.0 encodes up to three concurrent speakers in seven classes:
+/// silence, each speaker alone, then each pair.
+const POWERSET: [&[usize]; 7] = [&[], &[0], &[1], &[2], &[0, 1], &[0, 2], &[1, 2]];
+const LOCAL_SPEAKERS: usize = 3;
+/// The six permutations of three local speakers, for matching one window's
+/// arbitrary indices onto the previous window's.
+const PERMUTATIONS: [[usize; LOCAL_SPEAKERS]; 6] = [
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+];
 
 /// Merge same-class speech across a pause shorter than this, within one window.
 const MERGE_GAP_S: f32 = 0.25;
+/// Ceiling for a joined run. Without it, continuous speech chains into one
+/// segment spanning minutes — a worse voiceprint, and no turn resolution left.
+const MAX_JOINED_S: f32 = 20.0;
 /// CAM++ embeddings below this duration are noise; skip them.
 const MIN_EMBED_S: f32 = 0.4;
-/// Anchors for clustering: long enough for a stable voiceprint, no overlap class.
+/// Anchors for clustering: long enough for a stable voiceprint, mostly clean.
 const MIN_ANCHOR_S: f32 = 1.5;
 const MAX_ANCHORS: usize = 600;
 /// Average-linkage cosine distance below which two clusters merge in auto mode.
-/// Distance 0.45 ≈ cosine similarity 0.55.
-const CLUSTER_DIST: f32 = 0.45;
+///
+/// Measured directly, on stretches whose speaker is known from the transcript:
+/// two takes of the same voice land at 0.07–0.18, two different voices at
+/// 0.55–0.67. There is a wide empty band between, and 0.40 sits in the middle
+/// of it with room on both sides.
+///
+/// The number is only meaningful together with the segmentation. Tuning it
+/// against the old window-chopped segments suggested 0.65 — which is *above*
+/// the cross-speaker band and merges everyone into one cluster. Short segments
+/// give noisy embeddings; fix the segmentation before touching this.
+const CLUSTER_DIST: f32 = 0.40;
 /// Drop clusters whose total anchored speech is shorter than this (auto mode).
 const MIN_CLUSTER_S: f32 = 3.0;
 /// Turns shorter than this are absorbed into the longer neighbour.
@@ -42,11 +68,6 @@ const MIN_TURN_S: f32 = 0.4;
 /// `(start_s, end_s, speaker_id)` — 1-based after `polish_turns`.
 type SpeakerTurn = (f32, f32, usize);
 
-/// Powerset classes 4–6 are two simultaneous speakers inside a 10 s window.
-fn is_overlap_class(class: usize) -> bool {
-    class >= 4
-}
-
 /// Absolute sample position of frame `frame` in the window starting at
 /// `window_start`. The grid is anchored to each window — see bug 5 on
 /// [`speech_segments`].
@@ -54,15 +75,15 @@ fn frame_offset(window_start: usize, frame: usize) -> usize {
     window_start + FRAME_START + frame * FRAME_SIZE
 }
 
-/// Everything diarization needs at runtime — both ONNX models *and* the ONNX
-/// Runtime shared library — is downloaded into and loaded from this one
-/// directory. `cached()` is the only way to name a file in it.
+/// The ONNX models and the ONNX Runtime library sit in the shared model
+/// directory, beside the Whisper models. `cached()` is the only way to name a
+/// file in it.
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("voxmd")
-        .join("diarize")
+    crate::paths::models_dir()
 }
+
+/// File names this module downloads, for cache accounting and clearing.
+pub const MODEL_FILES: &[&str] = &[SEG_FILE, EMB_FILE];
 
 fn cached(name: &str) -> PathBuf {
     cache_dir().join(name)
@@ -116,9 +137,10 @@ struct SpeechSeg {
     start: f32,
     end: f32,
     range: (usize, usize),
-    class: u8,
+    /// Stitched local speaker track (0..[`LOCAL_SPEAKERS`]). Continuous across
+    /// window boundaries, but *not* a global speaker: clustering decides that.
+    track: usize,
     overlap: bool,
-    window: usize,
 }
 
 impl SpeechSeg {
@@ -160,6 +182,7 @@ struct DiarizeStats {
     n_clusters: usize,
     speech_per_cluster: Vec<f32>,
     first_turns: Vec<SpeakerTurn>,
+    first_turns_all: Vec<SpeakerTurn>,
 }
 
 /// Runs pyannote segmentation + embeddings and labels Whisper lines.
@@ -252,7 +275,13 @@ fn cluster_and_assign(
     let mut anchor_idx: Vec<usize> = items
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.embedding.is_some() && !s.overlap && s.duration() >= MIN_ANCHOR_S)
+        .filter(|(_, s)| {
+            let min = std::env::var("VOXMD_DIARIZE_ANCHOR")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(MIN_ANCHOR_S);
+            s.embedding.is_some() && !s.overlap && s.duration() >= min
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -292,8 +321,15 @@ fn cluster_and_assign(
         .collect();
     let durations: Vec<f32> = anchor_idx.iter().map(|&i| items[i].duration()).collect();
 
-    let (anchor_labels, merge_distances) =
-        agglomerative_cluster(&embeddings, CLUSTER_DIST, target_k, AUTO_SPEAKER_CAP);
+    let (anchor_labels, merge_distances) = agglomerative_cluster(
+        &embeddings,
+        std::env::var("VOXMD_DIARIZE_DIST")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(CLUSTER_DIST),
+        target_k,
+        AUTO_SPEAKER_CAP,
+    );
 
     let keep = if target_k.is_none() {
         keep_cluster_mask(&anchor_labels, &durations, MIN_CLUSTER_S)
@@ -340,6 +376,7 @@ fn cluster_and_assign(
         n_clusters: speech_per_cluster.len(),
         speech_per_cluster,
         first_turns,
+        first_turns_all: turns.clone(),
     };
     Ok((turns, stats))
 }
@@ -666,175 +703,260 @@ fn renumber_by_first_appearance(turns: &mut [SpeakerTurn]) {
     }
 }
 
-/// Local copy of pyannote-rs 0.3.4 `get_segments` with upstream bugs fixed,
-/// plus a cut on every powerset class change and at each 10 s window boundary.
+/// Runs pyannote segmentation over the whole file and returns speech runs.
 ///
-/// 1. i16 samples must be scaled to [-1, 1] or the ONNX model classifies every
-///    frame as non-speech (thewh1teagle/pyannote-rs#28).
-/// 2. Speech that lasts until EOF is flushed.
-/// 3. The original `from_fn` stopped when a 10 s window produced no *closed*
-///    segment (typical for a long opening utterance), dropping the rest.
-/// 4. Local speaker indices are only valid inside one window, so a turn never
-///    spans a window boundary. Overlap classes (4–6) are marked, not treated
-///    as a third speaker.
-/// 5. The frame counter is re-based to each window. Upstream carries it across
-///    windows, but the model emits 589 frames of 270 samples for a 160000-sample
-///    window, so the counter falls 970 samples (~61 ms) behind per window —
-///    about 22 s over an hour, which silently shifts every later speaker turn.
+/// segmentation-3.0 sees 10 s at a time and numbers the speakers it hears
+/// *within that window* — index 1 in one window and index 1 in the next are
+/// unrelated. The model is designed to be run with OVERLAPPING windows so
+/// consecutive windows can be matched up on the part they share; that is what
+/// this does, with a 50 % hop and the best of the six index permutations.
+///
+/// The previous version stepped window by window and simply cut every turn at
+/// the boundary, because it had no way to carry identity across. That produced
+/// speaker changes in lockstep with the 10 s grid — 62 % of all turn boundaries
+/// landed on a multiple of ten, where chance is about 4 %. A continuous
+/// monologue came out as alternating speakers.
+///
+/// Upstream bugs fixed along the way (pyannote-rs 0.3.4 `get_segments`):
+/// 1. i16 samples must be scaled to [-1, 1] or every frame reads as non-speech
+///    (thewh1teagle/pyannote-rs#28).
+/// 2. Speech lasting until EOF is flushed rather than dropped.
+/// 3. The original `from_fn` stopped when a window produced no *closed*
+///    segment — typical for a long opening utterance — losing the rest.
+/// 4. The frame counter is anchored per window (see [`frame_offset`]).
 fn speech_segments(
     samples: &[i16],
     sample_rate: u32,
     model_path: &Path,
     abort: &impl Fn() -> bool,
 ) -> Result<Vec<SpeechSeg>, String> {
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut session = seg_session(model_path)?;
     let window_size = (sample_rate as usize).saturating_mul(10);
     if window_size == 0 {
         return Err("Invalid sample rate for diarization.".to_string());
     }
 
-    if samples.is_empty() {
-        return Ok(Vec::new());
-    }
-    // The model wants a full 10 s window. Only the trailing partial window needs
-    // zero padding, so pad into a small scratch buffer instead of cloning the
-    // whole (multi-hundred-MB) episode.
-    let mut tail = Vec::new();
+    // Global frame grid: frame g starts at sample FRAME_START + g * FRAME_SIZE.
+    // Hopping by a whole number of frames keeps every window on that grid, so
+    // a window's local frame f is simply global frame `base + f`.
+    let mut tracks: Vec<[bool; LOCAL_SPEAKERS]> = Vec::new();
+    let mut hop_frames = 0usize;
+    let mut base = 0usize;
+    let mut window_start = 0usize;
+    let mut scratch: Vec<i16> = Vec::new();
 
-    let mut cur_class: Option<usize> = None;
-    let mut start_offset = 0.0_f64;
-    let mut start_window = 0usize;
-    let mut out = Vec::new();
-
-    for (window_i, start) in (0..samples.len()).step_by(window_size).enumerate() {
+    while window_start < samples.len() {
         if abort() {
             return Err("Cancelled.".to_string());
         }
-        // The frame grid restarts with every window. See bug 5 above.
-        let mut frame = 0usize;
-        let mut offset = frame_offset(start, frame);
-        let end = (start + window_size).min(samples.len());
-        let window = if end - start == window_size {
-            &samples[start..end]
+        let end = (window_start + window_size).min(samples.len());
+        let window: &[i16] = if end - window_start == window_size {
+            &samples[window_start..end]
         } else {
-            tail.clear();
-            tail.extend_from_slice(&samples[start..end]);
-            tail.resize(window_size, 0);
-            &tail[..]
+            scratch.clear();
+            scratch.extend_from_slice(&samples[window_start..end]);
+            scratch.resize(window_size, 0);
+            &scratch
         };
-        let samples_n = ndarray::Array1::from_iter(window.iter().map(|&x| x as f32 / 32768.0));
-        let view = samples_n.view().insert_axis(Axis(0)).insert_axis(Axis(1));
-        let inputs = ort::inputs![TensorRef::from_array_view(view.into_dyn())
-            .map_err(|e| format!("Diarization input: {e}"))?];
-        let ort_outs = session
-            .run(inputs)
-            .map_err(|e| format!("Diarization segmentation: {e}"))?;
-        let ort_out = ort_outs
-            .get("output")
-            .ok_or_else(|| "Diarization segmentation: output tensor missing".to_string())?;
-        let (shape, data) = ort_out
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("Diarization segmentation: {e}"))?;
-        let shape_slice: Vec<usize> = (0..shape.len()).map(|i| shape[i] as usize).collect();
-        let view = ArrayViewD::<f32>::from_shape(ndarray::IxDyn(&shape_slice), data)
-            .map_err(|e| format!("Diarization segmentation: {e}"))?;
 
-        for row in view.outer_iter() {
-            for sub_row in row.axis_iter(Axis(0)) {
-                let max_index = argmax(sub_row.iter().copied())?;
-                let speech_class = if max_index == 0 {
-                    None
-                } else {
-                    Some(max_index)
-                };
-                match (cur_class, speech_class) {
-                    (None, None) => {}
-                    (None, Some(c)) => {
-                        start_offset = offset as f64;
-                        start_window = window_i;
-                        cur_class = Some(c);
-                    }
-                    (Some(c), Some(d)) if c == d => {}
-                    (Some(c), new) => {
-                        out.push(make_seg(
-                            start_offset,
-                            offset as f64,
-                            sample_rate,
-                            samples.len(),
-                            c,
-                            start_window,
-                        ));
-                        if let Some(d) = new {
-                            start_offset = offset as f64;
-                            start_window = window_i;
-                            cur_class = Some(d);
-                        } else {
-                            cur_class = None;
-                        }
-                    }
+        let activity = window_activity(&mut session, window)?;
+        if activity.is_empty() {
+            break;
+        }
+        if hop_frames == 0 {
+            // Learned from the model rather than hardcoded: 589 frames for a
+            // 160000-sample window, so a 50 % hop is 294 frames.
+            hop_frames = (activity.len() / 2).max(1);
+        }
+
+        // Match this window's arbitrary indices onto what the overlap already
+        // holds, then merge. Chained window to window, so a run stays on one
+        // track for as long as the speech itself continues.
+        let perm = best_permutation(&tracks, &activity, base);
+        if tracks.len() < base + activity.len() {
+            tracks.resize(base + activity.len(), [false; LOCAL_SPEAKERS]);
+        }
+        for (f, frame) in activity.iter().enumerate() {
+            for local in 0..LOCAL_SPEAKERS {
+                if frame[perm[local]] {
+                    tracks[base + f][local] = true;
                 }
-                frame += 1;
-                offset = frame_offset(start, frame);
             }
         }
 
-        // Local speaker indices do not carry across the 10 s window.
-        if let Some(c) = cur_class.take() {
-            out.push(make_seg(
-                start_offset,
-                offset as f64,
-                sample_rate,
-                samples.len(),
-                c,
-                start_window,
-            ));
+        if end == samples.len() {
+            break;
         }
+        window_start += hop_frames * FRAME_SIZE;
+        base += hop_frames;
     }
 
-    Ok(merge_short_gaps(out))
+    Ok(merge_short_gaps(runs_from_tracks(
+        &tracks,
+        sample_rate,
+        samples.len(),
+    )))
 }
 
+/// One window through the model, decoded from powerset classes to per-frame
+/// activity for each of the three local speakers.
+fn window_activity(
+    session: &mut Session,
+    window: &[i16],
+) -> Result<Vec<[bool; LOCAL_SPEAKERS]>, String> {
+    let samples_n = ndarray::Array1::from_iter(window.iter().map(|&x| x as f32 / 32768.0));
+    let view = samples_n.view().insert_axis(Axis(0)).insert_axis(Axis(1));
+    let inputs = ort::inputs![TensorRef::from_array_view(view.into_dyn())
+        .map_err(|e| format!("Diarization input: {e}"))?];
+    let outs = session
+        .run(inputs)
+        .map_err(|e| format!("Diarization segmentation: {e}"))?;
+    let out = outs
+        .get("output")
+        .ok_or_else(|| "Diarization segmentation: output tensor missing".to_string())?;
+    let (shape, data) = out
+        .try_extract_tensor::<f32>()
+        .map_err(|e| format!("Diarization segmentation: {e}"))?;
+    let dims: Vec<usize> = (0..shape.len()).map(|i| shape[i] as usize).collect();
+    let view = ArrayViewD::<f32>::from_shape(ndarray::IxDyn(&dims), data)
+        .map_err(|e| format!("Diarization segmentation: {e}"))?;
+
+    let mut activity = Vec::new();
+    for row in view.outer_iter() {
+        for frame in row.axis_iter(Axis(0)) {
+            let class = argmax(frame.iter().copied())?;
+            let mut active = [false; LOCAL_SPEAKERS];
+            for &speaker in POWERSET.get(class).copied().unwrap_or(&[]) {
+                active[speaker] = true;
+            }
+            activity.push(active);
+        }
+    }
+    Ok(activity)
+}
+
+/// Which relabelling of this window's local speakers best matches the frames
+/// the previous window already wrote.
+///
+/// Scored on frames where both agree a speaker is active; silence carries no
+/// information about identity. With nothing to compare against — the first
+/// window, or an overlap of pure silence — the identity permutation wins,
+/// which is as good a guess as any.
+fn best_permutation(
+    tracks: &[[bool; LOCAL_SPEAKERS]],
+    activity: &[[bool; LOCAL_SPEAKERS]],
+    base: usize,
+) -> [usize; LOCAL_SPEAKERS] {
+    let overlap = tracks.len().saturating_sub(base).min(activity.len());
+    if overlap == 0 {
+        return PERMUTATIONS[0];
+    }
+    let mut best = PERMUTATIONS[0];
+    let mut best_score = -1i64;
+    for perm in PERMUTATIONS {
+        let mut score = 0i64;
+        for f in 0..overlap {
+            for local in 0..LOCAL_SPEAKERS {
+                if tracks[base + f][local] && activity[f][perm[local]] {
+                    score += 1;
+                }
+            }
+        }
+        if score > best_score {
+            best_score = score;
+            best = perm;
+        }
+    }
+    best
+}
+
+/// Contiguous stretches of activity per track, as segments on the sample grid.
+fn runs_from_tracks(
+    tracks: &[[bool; LOCAL_SPEAKERS]],
+    sample_rate: u32,
+    samples_len: usize,
+) -> Vec<SpeechSeg> {
+    let rate = sample_rate as f64;
+    let mut out = Vec::new();
+    for track in 0..LOCAL_SPEAKERS {
+        let mut start: Option<usize> = None;
+        for f in 0..=tracks.len() {
+            let active = f < tracks.len() && tracks[f][track];
+            match (start, active) {
+                (None, true) => start = Some(f),
+                (Some(from), false) => {
+                    out.push(make_run(from, f, track, tracks, rate, samples_len));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+    }
+    out.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(Ordering::Equal));
+    out
+}
+
+fn make_run(
+    from: usize,
+    to: usize,
+    track: usize,
+    tracks: &[[bool; LOCAL_SPEAKERS]],
+    rate: f64,
+    samples_len: usize,
+) -> SpeechSeg {
+    let start_sample = frame_offset(0, from);
+    let end_sample = frame_offset(0, to);
+    // Any simultaneous speech at all disqualifies the run as an anchor.
+    //
+    // Tolerating a little was tried and is much worse: at 5 % the clustering
+    // collapsed from two speakers to one. A blended voiceprint sits *between*
+    // the two real ones and bridges the clusters, so a handful of clean anchors
+    // beats many contaminated ones — everything else is assigned afterwards by
+    // nearest centroid anyway.
+    let overlap = tracks[from..to]
+        .iter()
+        .any(|f| f.iter().filter(|a| **a).count() > 1);
+    SpeechSeg {
+        start: (start_sample as f64 / rate) as f32,
+        end: (end_sample as f64 / rate) as f32,
+        range: (
+            start_sample.min(samples_len),
+            end_sample.clamp(start_sample.min(samples_len), samples_len),
+        ),
+        track,
+        overlap,
+    }
+}
+
+/// Bridges breath-length pauses inside one track.
+///
+/// Window boundaries no longer split anything — the tracks are stitched across
+/// them — so this is only about pauses. The ceiling keeps a long monologue from
+/// becoming one segment: a shorter run is a better voiceprint, and turns need
+/// somewhere to land.
 fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
     let mut out: Vec<SpeechSeg> = Vec::with_capacity(segs.len());
     for seg in segs {
         if let Some(last) = out.last_mut() {
             let gap = seg.start - last.end;
-            if last.window == seg.window
-                && last.class == seg.class
+            if last.track == seg.track
                 && (0.0..MERGE_GAP_S).contains(&gap)
+                && seg.end - last.start <= MAX_JOINED_S
             {
                 last.end = seg.end;
-                // Contiguous range: the sub-250 ms pause is kept rather than
-                // spliced out, which also avoids a discontinuity in the audio
-                // the embedder sees.
+                // The pause is kept rather than spliced out: a discontinuity
+                // would be audible to the embedder.
                 last.range.1 = seg.range.1.max(last.range.1);
+                last.overlap = last.overlap || seg.overlap;
                 continue;
             }
         }
         out.push(seg);
     }
     out
-}
-
-fn make_seg(
-    start_offset: f64,
-    end_offset: f64,
-    sample_rate: u32,
-    samples_len: usize,
-    class: usize,
-    window: usize,
-) -> SpeechSeg {
-    let rate = sample_rate as f64;
-    let start_idx = (start_offset.max(0.0) as usize).min(samples_len);
-    let end_idx = (end_offset.max(0.0) as usize).clamp(start_idx, samples_len);
-    SpeechSeg {
-        start: (start_offset / rate) as f32,
-        end: (end_offset / rate) as f32,
-        range: (start_idx, end_idx),
-        class: class as u8,
-        overlap: is_overlap_class(class),
-        window,
-    }
 }
 
 fn argmax(values: impl IntoIterator<Item = f32>) -> Result<usize, String> {
@@ -868,6 +990,15 @@ fn seg_session(path: &Path) -> Result<Session, String> {
         .map_err(|e| format!("Diarization session: {e}"))
 }
 
+fn median_turn(turns: &[SpeakerTurn]) -> f32 {
+    let mut d: Vec<f32> = turns.iter().map(|t| (t.1 - t.0).max(0.0)).collect();
+    if d.is_empty() {
+        return 0.0;
+    }
+    d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    d[d.len() / 2]
+}
+
 #[allow(dead_code)]
 fn format_diarize_report(stats: &DiarizeStats) -> String {
     let mut s = String::new();
@@ -880,13 +1011,30 @@ fn format_diarize_report(stats: &DiarizeStats) -> String {
         stats.duration_hist
     ));
     let n = stats.merge_distances.len();
-    let preview = stats.merge_distances.iter().take(24);
-    s.push_str(&format!("merge distances ({n}):"));
-    for d in preview {
+    s.push_str(&format!(
+        "merge distances ({n}), last 24 (the dendrogram tail):"
+    ));
+    for d in stats
+        .merge_distances
+        .iter()
+        .rev()
+        .take(24)
+        .collect::<Vec<_>>()
+        .iter()
+        .rev()
+    {
         s.push_str(&format!(" {d:.3}"));
     }
-    if n > 24 {
-        s.push_str(" …");
+    s.push('\n');
+    // Where would a given threshold have stopped? The count is anchors minus
+    // the merges that ran below it.
+    s.push_str("clusters if threshold were:");
+    for t in [0.45f32, 0.55, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90] {
+        let below = stats.merge_distances.iter().filter(|d| **d < t).count();
+        s.push_str(&format!(
+            "  {t:.2}→{}",
+            stats.n_anchors.saturating_sub(below).max(1)
+        ));
     }
     s.push('\n');
     s.push_str("speech seconds per speaker:");
@@ -894,6 +1042,28 @@ fn format_diarize_report(stats: &DiarizeStats) -> String {
         s.push_str(&format!("  {}: {sec:.1}s", i + 1));
     }
     s.push('\n');
+    // How many turn boundaries sit on the 10 s window grid? Speaker changes have
+    // no reason to align with the model's input size, so anything above the
+    // chance rate is the segmenter showing through instead of the conversation.
+    let boundaries: Vec<f32> = stats.first_turns_all.iter().skip(1).map(|t| t.0).collect();
+    let on_grid = boundaries
+        .iter()
+        .filter(|b| {
+            let r = *b % 10.0;
+            !(0.2..=9.8).contains(&r)
+        })
+        .count();
+    let pct = if boundaries.is_empty() {
+        0.0
+    } else {
+        100.0 * on_grid as f32 / boundaries.len() as f32
+    };
+    s.push_str(&format!(
+        "turns: {}  boundaries on the 10 s grid: {on_grid}/{} ({pct:.0}%)  median turn: {:.1}s\n",
+        stats.first_turns_all.len(),
+        boundaries.len(),
+        median_turn(&stats.first_turns_all)
+    ));
     s.push_str("first turns:\n");
     for (start, end, id) in &stats.first_turns {
         s.push_str(&format!("  [{start:8.2}–{end:8.2}] speaker {id}\n"));
@@ -919,10 +1089,8 @@ mod tests {
     #[test]
     fn every_asset_lives_in_the_cache_dir() {
         let dir = cache_dir();
-        assert!(
-            dir.ends_with("voxmd/diarize") || dir.ends_with("voxmd\\diarize"),
-            "{dir:?}"
-        );
+        // Same directory as the Whisper models: one place, one size, one delete.
+        assert_eq!(dir, crate::model_download::cache_dir());
 
         let mut assets = vec![cached(SEG_FILE), cached(EMB_FILE)];
         if let Ok(lib) = onnx_runtime::library_path(&dir) {
@@ -972,37 +1140,100 @@ mod tests {
         assert_eq!(argmax([0.1, 0.9, 0.2]).unwrap(), 1);
     }
 
+    /// The powerset table is what turns a class index into "who is talking".
+    /// A wrong entry silently mislabels every overlap.
     #[test]
-    fn make_seg_clamps_to_original_length() {
-        let all = vec![1_i16, 2, 3, 4];
-        // Offsets run past the end of the audio; the range must not.
-        let seg = make_seg(0.0, 6.0, 2, 4, 1, 0);
-        assert_eq!(seg.samples(&all), &[1, 2, 3, 4]);
-        assert!((seg.start - 0.0).abs() < f32::EPSILON);
-        assert!((seg.end - 3.0).abs() < f32::EPSILON);
-        assert_eq!(seg.class, 1);
-        assert!(!seg.overlap);
-        assert_eq!(seg.window, 0);
+    fn powerset_decodes_the_seven_classes() {
+        assert_eq!(POWERSET[0], &[] as &[usize]);
+        assert_eq!(POWERSET[1], &[0]);
+        assert_eq!(POWERSET[2], &[1]);
+        assert_eq!(POWERSET[3], &[2]);
+        // 4..6 are the pairs — simultaneous speech.
+        assert_eq!(POWERSET[4], &[0, 1]);
+        assert_eq!(POWERSET[5], &[0, 2]);
+        assert_eq!(POWERSET[6], &[1, 2]);
+        for pair in &POWERSET[4..7] {
+            assert_eq!(pair.len(), 2);
+        }
     }
 
     #[test]
-    fn overlap_classes_are_four_through_six() {
-        assert!(!is_overlap_class(1));
-        assert!(!is_overlap_class(3));
-        assert!(is_overlap_class(4));
-        assert!(is_overlap_class(6));
-        let seg = make_seg(0.0, 2.0, 1, 2, 5, 1);
-        assert!(seg.overlap);
+    fn permutations_are_the_six_distinct_relabellings() {
+        assert_eq!(PERMUTATIONS.len(), 6);
+        let mut seen: Vec<[usize; LOCAL_SPEAKERS]> = PERMUTATIONS.to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 6);
+        for p in PERMUTATIONS {
+            let mut sorted = p;
+            sorted.sort_unstable();
+            assert_eq!(sorted, [0, 1, 2]);
+        }
+        // The identity must come first: it is the fallback with nothing to match.
+        assert_eq!(PERMUTATIONS[0], [0, 1, 2]);
     }
 
-    fn seg(start: f32, end: f32, range: (usize, usize), window: usize) -> SpeechSeg {
+    /// The heart of the stitching. A window's speaker indices are arbitrary, so
+    /// the one that continues the previous window has to be found by overlap.
+    #[test]
+    fn stitching_recovers_a_swapped_window() {
+        // Global so far: track 0 talking, track 1 silent.
+        let tracks: Vec<[bool; LOCAL_SPEAKERS]> = (0..10).map(|_| [true, false, false]).collect();
+        // The next window heard the same voice but numbered it 1.
+        let activity: Vec<[bool; LOCAL_SPEAKERS]> = (0..10).map(|_| [false, true, false]).collect();
+        // Overlap covers the last 5 frames.
+        let perm = best_permutation(&tracks, &activity, 5);
+        assert_eq!(perm[0], 1, "track 0 must map onto the window's speaker 1");
+    }
+
+    #[test]
+    fn stitching_falls_back_to_identity_without_evidence() {
+        let silent: Vec<[bool; LOCAL_SPEAKERS]> = (0..8).map(|_| [false; LOCAL_SPEAKERS]).collect();
+        let some: Vec<[bool; LOCAL_SPEAKERS]> = (0..8).map(|_| [true, false, false]).collect();
+        // No previous frames at all.
+        assert_eq!(best_permutation(&[], &some, 0), [0, 1, 2]);
+        // An overlap of pure silence says nothing about identity.
+        assert_eq!(best_permutation(&silent, &some, 0), [0, 1, 2]);
+    }
+
+    #[test]
+    fn runs_are_contiguous_activity_per_track() {
+        let mut tracks = vec![[false; LOCAL_SPEAKERS]; 10];
+        for frame in tracks.iter_mut().take(6).skip(2) {
+            frame[0] = true;
+        }
+        for frame in tracks.iter_mut().take(8).skip(4) {
+            frame[1] = true;
+        }
+        let runs = runs_from_tracks(&tracks, SAMPLE_RATE, usize::MAX);
+        assert_eq!(runs.len(), 2);
+        // Sorted by start time, and the shared frames 4..6 count as overlap.
+        assert_eq!(runs[0].track, 0);
+        assert_eq!(runs[1].track, 1);
+        assert!(runs[0].overlap && runs[1].overlap);
+        assert_eq!(runs[0].range.0, frame_offset(0, 2));
+        assert_eq!(runs[0].range.1, frame_offset(0, 6));
+    }
+
+    #[test]
+    fn a_lone_track_is_not_marked_as_overlap() {
+        let mut tracks = vec![[false; LOCAL_SPEAKERS]; 6];
+        for frame in tracks.iter_mut().take(4).skip(1) {
+            frame[2] = true;
+        }
+        let runs = runs_from_tracks(&tracks, SAMPLE_RATE, usize::MAX);
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].overlap);
+        assert_eq!(runs[0].track, 2);
+    }
+
+    fn seg(start: f32, end: f32, range: (usize, usize), track: usize) -> SpeechSeg {
         SpeechSeg {
             start,
             end,
             range,
-            class: 1,
+            track,
             overlap: false,
-            window,
         }
     }
 
@@ -1016,10 +1247,41 @@ mod tests {
         assert_eq!(merged[0].samples(&all), &[1, 2, 3, 4]);
     }
 
+    /// Pauses inside one track bridge; a real silence ends the segment.
     #[test]
-    fn merge_short_gaps_skips_other_window() {
-        let out = merge_short_gaps(vec![seg(0.0, 1.0, (0, 1), 0), seg(1.1, 2.0, (1, 2), 1)]);
-        assert_eq!(out.len(), 2);
+    fn short_pauses_bridge_within_a_track() {
+        let joined = merge_short_gaps(vec![seg(0.0, 9.98, (0, 1), 0), seg(10.05, 19.9, (1, 2), 0)]);
+        assert_eq!(joined.len(), 1);
+        assert!((joined[0].end - 19.9).abs() < f32::EPSILON);
+
+        // 0.6 s of silence: room for a speaker change, so it stays split.
+        let split = merge_short_gaps(vec![seg(0.0, 9.4, (0, 1), 0), seg(10.05, 19.9, (1, 2), 0)]);
+        assert_eq!(split.len(), 2);
+
+        // Different tracks never merge, however close.
+        let other = merge_short_gaps(vec![seg(0.0, 9.98, (0, 1), 0), seg(10.0, 19.9, (1, 2), 1)]);
+        assert_eq!(other.len(), 2);
+    }
+
+    /// Without a ceiling, continuous speech chains into one segment spanning
+    /// minutes — a worse voiceprint and no turn resolution left.
+    #[test]
+    fn joining_stops_at_the_length_ceiling() {
+        let mut segs = Vec::new();
+        let mut t = 0.0f32;
+        for _ in 0..8 {
+            segs.push(seg(t, t + 9.95, (0, 1), 0));
+            t += 10.0;
+        }
+        let out = merge_short_gaps(segs);
+        assert!(out.len() > 1, "everything collapsed into one segment");
+        for s in &out {
+            assert!(
+                s.end - s.start <= MAX_JOINED_S + 0.1,
+                "{:.1}s exceeds the ceiling",
+                s.end - s.start
+            );
+        }
     }
 
     #[test]
@@ -1116,6 +1378,53 @@ mod tests {
             .expect("extract output");
         // 589 frames per 10 s window — the same number `frame_offset` is built on.
         assert_eq!(shape[1], 589, "unexpected frame count {shape:?}");
+    }
+
+    /// Embeds stretches whose speaker is known from the transcript and prints
+    /// the distance matrix — the ground truth this module has no other way to
+    /// get. Set `VOXMD_EMBED_AUDIO`, then edit `picks` to match that file.
+    ///
+    /// What it established for the shipped settings: two takes of one voice sit
+    /// at 0.07–0.18 apart, two different voices at 0.55–0.67. That empty band is
+    /// where [`CLUSTER_DIST`] has to land, and measuring it beat guessing —
+    /// a value tuned against the old segmentation was above the band and merged
+    /// every speaker into one.
+    #[test]
+    fn embedding_distance_matrix() {
+        let Some(path) = std::env::var_os("VOXMD_EMBED_AUDIO") else {
+            return;
+        };
+        let all = crate::audio::decode_file_to_mono_16k(&PathBuf::from(path), || false)
+            .expect("decode audio");
+        let pcm = to_i16(&all);
+        let picks: [(&str, f32, f32); 6] = [
+            ("A-1", 22.0, 34.0),
+            ("A-2", 80.0, 92.0),
+            ("A-3", 134.0, 146.0),
+            ("B-1", 172.0, 184.0),
+            ("B-2", 190.0, 202.0),
+            ("B-3", 216.0, 228.0),
+        ];
+        onnx_runtime::init(&cache_dir()).expect("initialise ONNX Runtime");
+        let mut extractor =
+            pyannote_rs::EmbeddingExtractor::new(cached(EMB_FILE)).expect("embedder");
+        let mut embeddings = Vec::new();
+        for (name, from, to) in picks {
+            let i0 = (from * SAMPLE_RATE as f32) as usize;
+            let i1 = ((to * SAMPLE_RATE as f32) as usize).min(pcm.len());
+            let mut v: Vec<f32> = extractor.compute(&pcm[i0..i1]).expect("embed").collect();
+            l2_normalize(&mut v);
+            embeddings.push((name, v));
+        }
+        let header: String = picks.iter().map(|p| format!("{:>9}", p.0)).collect();
+        eprintln!("\n{:8}{header}", "");
+        for (name, a) in &embeddings {
+            let row: String = embeddings
+                .iter()
+                .map(|(_, b)| format!("{:9.3}", cosine_dist(a, b)))
+                .collect();
+            eprintln!("{name:8}{row}");
+        }
     }
 
     /// Set `VOXMD_DIARIZE_AUDIO` to an episode file to print clustering stats.

@@ -6,6 +6,7 @@ mod llm;
 mod meta;
 mod model_download;
 mod onnx_runtime;
+mod paths;
 mod pipeline;
 mod podcast;
 mod vulkan_runtime;
@@ -26,6 +27,15 @@ struct VulkanStatus {
     loader_available: bool,
     /// GPU Whisper path is usable right now (`built_with_vulkan && loader_available`).
     available: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCacheStats {
+    files: usize,
+    bytes: u64,
+    /// Shown in Settings so it is obvious where the models ended up.
+    dir: String,
 }
 
 #[tauri::command]
@@ -54,13 +64,24 @@ fn list_whisper_models() -> Vec<ModelInfo> {
     model_download::list_models()
 }
 
-/// Returns the local cache directory for Whisper models.
+/// Directory every downloaded model lives in.
 #[tauri::command(async)]
 fn whisper_cache_dir() -> String {
     model_download::cache_dir().to_string_lossy().into_owned()
 }
 
-/// Deletes all cached Whisper model files.
+/// File count and total size of the downloaded models.
+#[tauri::command(async)]
+fn model_cache_stats() -> ModelCacheStats {
+    let stats = model_download::cache_stats();
+    ModelCacheStats {
+        files: stats.files,
+        bytes: stats.bytes,
+        dir: model_download::cache_dir().to_string_lossy().into_owned(),
+    }
+}
+
+/// Deletes every downloaded model — Whisper and the diarization files.
 #[tauri::command(async)]
 fn clear_whisper_cache() -> Result<(), String> {
     model_download::clear_model_cache()
@@ -166,6 +187,10 @@ async fn start_transcription(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 1.0.x kept models under ~/.cache/voxmd/{whisper,diarize}. Move them rather
+    // than making everyone re-download several gigabytes.
+    paths::migrate_legacy_models(&model_download::managed_files());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -178,6 +203,7 @@ pub fn run() {
             vulkan_status,
             list_whisper_models,
             whisper_cache_dir,
+            model_cache_stats,
             clear_whisper_cache,
             system_summary_language,
             fetch_podcast_feed,
