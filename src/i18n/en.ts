@@ -108,7 +108,6 @@ export const en = {
 
   "about.tagline":
     "Transcribe audio to Markdown with local Whisper and your LLM API. Settings and keys stay on this device.",
-  "about.version": "Version",
   "about.repo": "GitHub repository",
 
   "dictation.microphone": "Microphone",
@@ -182,7 +181,6 @@ export const en = {
   "settings.whisperModel": "Whisper model",
   "settings.customPath": "Custom path…",
   "settings.clearingCache": "Deleting…",
-  "settings.clearCacheTitle": "Delete all downloaded Whisper models from the local cache",
   "settings.modelPathPlaceholder": "/absolute/path/to/model.bin",
   "settings.whisperPathAria": "Path to a local Whisper model file",
   "settings.choosePathTitle": "Choose a local .bin or .gguf model file",
@@ -314,6 +312,16 @@ export const en = {
   "settings.modelCacheSize": "{size} on disk",
   "settings.modelCacheDir": "in {dir}",
   "settings.freeSpaceTitle": "Delete every downloaded model — Whisper and the speaker files",
+  "credits.speech": "Speech recognition",
+  "credits.speakers": "Speaker separation",
+  "credits.app": "Application",
+  "credits.ui": "Interface",
+  "credits.whisperCpp": "Runs the transcription on this device",
+  "credits.whisperModel": "OpenAI's model, downloaded on first use",
+  "credits.symphonia": "Audio decoding · copyleft licence",
+  "credits.wespeaker": "Voiceprints, via the pyannote-rs release",
+  "credits.onnxruntime": "Downloaded on the first diarized run",
+  "credits.licences": "Licences as published by each project.",
   "msg.batchComplete": "Batch complete.",
 } as const;
 

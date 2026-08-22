@@ -23,6 +23,7 @@ import {
   type UiLanguageSetting,
 } from "../i18n";
 import { asMaxSpeakers, isSummarySystemLanguage, isTranscriptionAuto } from "../lib/configStore";
+import { CREDITS } from "../lib/credits";
 import { formatBytes, toMsg } from "../lib/jobs";
 import {
   applyProvider,
@@ -807,23 +808,51 @@ export function SettingsDrawer({
 
     about: (
       <div className="about-panel">
-        <img src={appIcon} alt="" width={96} height={96} className="about-app-icon" />
-        <p className="about-tagline">{t("about.tagline")}</p>
-        <p className="about-version">
-          <span className="muted-text">{t("about.version")}</span>{" "}
-          <span className="mono">{version || "…"}</span>
-        </p>
-        <div>
-          <div className="about-section-label">{t("about.repo")}</div>
-          <button
-            type="button"
-            className="about-repo-link"
-            title={GITHUB_URL}
-            onClick={() => void openUrl(GITHUB_URL)}
-          >
-            {GITHUB_URL}
-          </button>
+        <header className="about-head">
+          <img src={appIcon} alt="" width={56} height={56} />
+          <span className="about-head-text">
+            <strong>VoxMD</strong>
+            <span className="field-hint">{t("about.tagline")}</span>
+            <span className="about-meta">
+              <span className="mono">{version || "…"}</span>
+              <button
+                type="button"
+                className="link-btn"
+                title={GITHUB_URL}
+                onClick={() => void openUrl(GITHUB_URL)}
+              >
+                {t("about.repo")}
+              </button>
+            </span>
+          </span>
+        </header>
+
+        <div className="credits">
+          {CREDITS.map((group) => (
+            <section className="credits-group" key={group.title}>
+              <h3 className="field-label">{t(group.title)}</h3>
+              <ul>
+                {group.items.map((credit) => (
+                  <li key={credit.name}>
+                    <button
+                      type="button"
+                      className="link-btn"
+                      title={credit.url}
+                      onClick={() => void openUrl(credit.url)}
+                    >
+                      {credit.name}
+                    </button>
+                    <span className="credits-license">{credit.license}</span>
+                    {credit.note ? (
+                      <span className="credits-note">{t(credit.note)}</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
         </div>
+        <p className="field-hint">{t("credits.licences")}</p>
       </div>
     ),
   };

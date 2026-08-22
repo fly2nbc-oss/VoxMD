@@ -102,7 +102,6 @@ export const es: Messages = {
 
   "about.tagline":
     "Transcribe audio a Markdown con Whisper en local y tu API de LLM. Los ajustes y las claves permanecen en este dispositivo.",
-  "about.version": "Versión",
   "about.repo": "Repositorio de GitHub",
 
   "dictation.microphone": "Micrófono",
@@ -180,7 +179,6 @@ export const es: Messages = {
   "settings.whisperModel": "Modelo Whisper",
   "settings.customPath": "Ruta personalizada…",
   "settings.clearingCache": "Eliminando…",
-  "settings.clearCacheTitle": "Eliminar de la caché local todos los modelos Whisper descargados",
   "settings.modelPathPlaceholder": "/ruta/absoluta/al/modelo.bin",
   "settings.whisperPathAria": "Ruta a un archivo de modelo Whisper local",
   "settings.choosePathTitle": "Elegir un archivo de modelo .bin o .gguf local",
@@ -313,5 +311,15 @@ export const es: Messages = {
   "settings.modelCacheSize": "{size} en disco",
   "settings.modelCacheDir": "en {dir}",
   "settings.freeSpaceTitle": "Eliminar todos los modelos descargados — Whisper y los archivos de hablantes",
+  "credits.speech": "Reconocimiento de voz",
+  "credits.speakers": "Separación de hablantes",
+  "credits.app": "Aplicación",
+  "credits.ui": "Interfaz",
+  "credits.whisperCpp": "Ejecuta la transcripción en este dispositivo",
+  "credits.whisperModel": "Modelo de OpenAI, descargado en el primer uso",
+  "credits.symphonia": "Decodificación de audio · licencia copyleft",
+  "credits.wespeaker": "Huellas de voz, mediante la publicación de pyannote-rs",
+  "credits.onnxruntime": "Se descarga en la primera ejecución con hablantes",
+  "credits.licences": "Licencias según las publica cada proyecto.",
   "msg.batchComplete": "Lote completado.",
 };

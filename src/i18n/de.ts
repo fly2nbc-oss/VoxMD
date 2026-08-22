@@ -102,7 +102,6 @@ export const de: Messages = {
 
   "about.tagline":
     "Audio mit lokalem Whisper und deiner LLM-API nach Markdown transkribieren. Einstellungen und Schlüssel bleiben auf diesem Gerät.",
-  "about.version": "Version",
   "about.repo": "GitHub-Repository",
 
   "dictation.microphone": "Mikrofon",
@@ -180,7 +179,6 @@ export const de: Messages = {
   "settings.whisperModel": "Whisper-Modell",
   "settings.customPath": "Eigener Pfad…",
   "settings.clearingCache": "Wird gelöscht…",
-  "settings.clearCacheTitle": "Alle heruntergeladenen Whisper-Modelle aus dem Cache löschen",
   "settings.modelPathPlaceholder": "/absoluter/pfad/zum/modell.bin",
   "settings.whisperPathAria": "Pfad zu einer lokalen Whisper-Modelldatei",
   "settings.choosePathTitle": "Lokale .bin- oder .gguf-Modelldatei auswählen",
@@ -313,5 +311,15 @@ export const de: Messages = {
   "settings.modelCacheSize": "{size} belegt",
   "settings.modelCacheDir": "in {dir}",
   "settings.freeSpaceTitle": "Alle geladenen Modelle löschen — Whisper und die Sprecher-Dateien",
+  "credits.speech": "Spracherkennung",
+  "credits.speakers": "Sprechertrennung",
+  "credits.app": "Anwendung",
+  "credits.ui": "Oberfläche",
+  "credits.whisperCpp": "Führt die Transkription auf diesem Gerät aus",
+  "credits.whisperModel": "Modell von OpenAI, wird bei der ersten Nutzung geladen",
+  "credits.symphonia": "Audio-Dekodierung · Copyleft-Lizenz",
+  "credits.wespeaker": "Stimmabdrücke, über das pyannote-rs-Release",
+  "credits.onnxruntime": "Wird beim ersten Sprecherlauf geladen",
+  "credits.licences": "Lizenzen wie von den jeweiligen Projekten angegeben.",
   "msg.batchComplete": "Stapel abgeschlossen.",
 };

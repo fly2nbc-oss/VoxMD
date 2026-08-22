@@ -915,14 +915,105 @@ select.input {
   color: var(--muted);
 }
 
+/* Compact and top-aligned. Centring four short lines in a 1024 px panel left
+   the content adrift in the middle of an empty window. */
 .about-panel {
   display: flex;
   flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.about-head img {
+  flex-shrink: 0;
+}
+
+.about-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.about-head-text > strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.about-head-text .field-hint {
+  margin: 0;
+  max-width: 62ch;
+}
+
+.about-meta {
+  display: flex;
   align-items: center;
   gap: var(--space-md);
-  text-align: center;
-  margin: auto 0;
-  padding: var(--space-xl) 0;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Four columns where the drawer is wide, folding down as it narrows. */
+.credits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+.credits-group ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.credits-group li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.credits-license {
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.credits-note {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+/* A link that is a button, because a Tauri webview must not follow an href. */
+.link-btn {
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-align: left;
+}
+
+.link-btn:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
 }
 
 .settings-dirty {
@@ -1085,37 +1176,8 @@ select.input {
   overflow: hidden;
 }
 
-.about-app-icon {
-  display: block;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--line-soft);
-  box-shadow: var(--shadow);
-}
 
-.about-repo-link {
-  display: block;
-  width: 100%;
-  padding: 0;
-  margin: 0;
-  min-height: unset;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: left;
-  word-break: break-all;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: rgba(91, 142, 196, 0.45);
-}
 
-.about-repo-link:hover:not(:disabled) {
-  color: var(--accent-strong);
-  background: transparent;
-}
 
 .icon {
   color: currentColor;
@@ -1160,10 +1222,6 @@ select.input {
 button:focus-visible,
 .icon-btn:focus-visible,
 .podcast-recent-pick:focus-visible,
-.about-repo-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 
 .status-slot {
   display: flex;
@@ -1276,23 +1334,8 @@ button:focus-visible,
   cursor: default;
 }
 
-/* About dialog typography, previously inline style objects. */
-.about-tagline {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
 
-.about-version {
-  margin: 0;
-  font-size: 13px;
-}
 
-.about-section-label {
-  color: var(--muted);
-  font-size: 12px;
-  margin-bottom: 4px;
-}
 
 .muted-text {
   color: var(--muted);
