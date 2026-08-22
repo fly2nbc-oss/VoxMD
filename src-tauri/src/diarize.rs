@@ -27,22 +27,7 @@ const FRAME_START: usize = 721;
 /// silence, each speaker alone, then each pair.
 const POWERSET: [&[usize]; 7] = [&[], &[0], &[1], &[2], &[0, 1], &[0, 2], &[1, 2]];
 const LOCAL_SPEAKERS: usize = 3;
-/// The six permutations of three local speakers, for matching one window's
-/// arbitrary indices onto the previous window's.
-const PERMUTATIONS: [[usize; LOCAL_SPEAKERS]; 6] = [
-    [0, 1, 2],
-    [0, 2, 1],
-    [1, 0, 2],
-    [1, 2, 0],
-    [2, 0, 1],
-    [2, 1, 0],
-];
 
-/// Merge same-class speech across a pause shorter than this, within one window.
-const MERGE_GAP_S: f32 = 0.25;
-/// Ceiling for a joined run. Without it, continuous speech chains into one
-/// segment spanning minutes — a worse voiceprint, and no turn resolution left.
-const MAX_JOINED_S: f32 = 20.0;
 /// CAM++ embeddings below this duration are noise; skip them.
 const MIN_EMBED_S: f32 = 0.4;
 /// Anchors for clustering: long enough for a stable voiceprint, mostly clean.
@@ -64,20 +49,6 @@ const CLUSTER_DIST: f32 = 0.40;
 const MIN_CLUSTER_S: f32 = 3.0;
 /// Turns shorter than this are absorbed into the longer neighbour.
 const MIN_TURN_S: f32 = 0.4;
-/// What a change of speaker costs, in the same units as a cosine distance
-/// between a segment and a cluster centroid. See [`assign_with_continuity`].
-///
-/// Measured, and the honest result is that continuity buys little here: 0.05,
-/// 0.10 and 0.20 all score the same as no penalty at all, and 0.30 and above
-/// score *worse* by over-smoothing real turns. Kept at the low end because the
-/// mechanism still earns its place on segments with no embedding — those carry
-/// the previous speaker across instead of being snapped to whatever is nearest
-/// in time. The flicker that remains is not assignment noise; the clusters
-/// themselves do not match the voices.
-const SWITCH_PENALTY: f32 = 0.10;
-/// The penalty decays with this time constant as the silence before a segment
-/// grows: a pause is where a turn plausibly changes.
-const SWITCH_GAP_TAU_S: f32 = 0.6;
 
 /// `(start_s, end_s, speaker_id)` — 1-based after `polish_turns`.
 type SpeakerTurn = (f32, f32, usize);
@@ -144,43 +115,44 @@ fn to_i16(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
-/// One stretch of speech. `range` indexes the *original* (unpadded) sample
-/// buffer; holding indices instead of an owned copy keeps a multi-hour episode
-/// from allocating a second full-length i16 buffer spread over thousands of Vecs.
-struct SpeechSeg {
-    start: f32,
-    end: f32,
-    range: (usize, usize),
-    /// Stitched local speaker track (0..[`LOCAL_SPEAKERS`]). Continuous across
-    /// window boundaries, but *not* a global speaker: clustering decides that.
-    track: usize,
-    overlap: bool,
-}
-
-impl SpeechSeg {
-    fn duration(&self) -> f32 {
-        (self.end - self.start).max(0.0)
-    }
-
-    fn samples<'a>(&self, all: &'a [i16]) -> &'a [i16] {
-        let (a, b) = self.range;
-        let a = a.min(all.len());
-        let b = b.clamp(a, all.len());
-        &all[a..b]
-    }
-}
-
-struct SegEmb {
-    start: f32,
-    end: f32,
+/// One local speaker inside one window: the model's own output, so the audio
+/// behind it is single-speaker by construction.
+///
+/// This is the unit that gets embedded and clustered. Building long runs first
+/// and embedding those was the mistake: a run follows *track activity*, and the
+/// track identity drifts whenever only one person speaks, so runs spanned turn
+/// changes. Measured on a two-person podcast, roughly half the resulting
+/// anchors sat between the two voices and the clustering grouped blends —
+/// five clusters for two speakers, with no threshold able to fix it.
+struct WindowSpeaker {
+    /// Global frame indices this speaker holds, as `[from, to)` spans.
+    spans: Vec<(usize, usize)>,
+    frames: usize,
     embedding: Option<Vec<f32>>,
-    overlap: bool,
 }
 
-impl SegEmb {
-    fn duration(&self) -> f32 {
-        (self.end - self.start).max(0.0)
+/// Collects the frames one local speaker holds in one window, as spans.
+fn spans_for(
+    activity: &[[bool; LOCAL_SPEAKERS]],
+    base: usize,
+    local: usize,
+) -> (Vec<(usize, usize)>, usize) {
+    let mut spans = Vec::new();
+    let mut frames = 0usize;
+    let mut start: Option<usize> = None;
+    for f in 0..=activity.len() {
+        let on = f < activity.len() && activity[f][local];
+        match (start, on) {
+            (None, true) => start = Some(f),
+            (Some(from), false) => {
+                spans.push((base + from, base + f));
+                frames += f - from;
+                start = None;
+            }
+            _ => {}
+        }
     }
+    (spans, frames)
 }
 
 #[allow(dead_code)]
@@ -244,113 +216,85 @@ fn run_diarize(
 
     let mut extractor = pyannote_rs::EmbeddingExtractor::new(emb_path)
         .map_err(|e| format!("Diarization embedding model: {e}"))?;
-    let segments = speech_segments(&samples, SAMPLE_RATE, seg_path, abort)?;
-    let duration_hist = duration_histogram(segments.iter().map(SpeechSeg::duration));
+    let mut units = window_speakers(&samples, SAMPLE_RATE, seg_path, abort)?;
+    let duration_hist = duration_histogram(units.iter().map(|u| frames_to_secs(u.frames)));
 
-    let mut items = Vec::with_capacity(segments.len());
-    for seg in &segments {
+    for unit in units.iter_mut() {
         if abort() {
             return Err("Cancelled.".to_string());
         }
-        let seg_samples = seg.samples(&samples);
-        let embedding = if seg.duration() >= MIN_EMBED_S && !seg_samples.is_empty() {
-            match extractor.compute(seg_samples) {
-                Ok(iter) => {
-                    let mut v: Vec<f32> = iter.collect();
-                    l2_normalize(&mut v);
-                    Some(v)
-                }
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
-        items.push(SegEmb {
-            start: seg.start,
-            end: seg.end,
-            embedding,
-            overlap: seg.overlap,
-        });
+        if frames_to_secs(unit.frames) < MIN_EMBED_S {
+            continue;
+        }
+        // Only this speaker's own frames, spliced together — the other voice in
+        // the window contributes nothing to the voiceprint.
+        let mut audio = Vec::with_capacity(unit.frames * FRAME_SIZE);
+        for &(from, to) in &unit.spans {
+            let a = frame_offset(0, from).min(samples.len());
+            let b = frame_offset(0, to).clamp(a, samples.len());
+            audio.extend_from_slice(&samples[a..b]);
+        }
+        if audio.is_empty() {
+            continue;
+        }
+        if let Ok(iter) = extractor.compute(&audio) {
+            let mut v: Vec<f32> = iter.collect();
+            l2_normalize(&mut v);
+            unit.embedding = Some(v);
+        }
     }
 
-    let (turns, stats) = cluster_and_assign(&items, target_k, duration_hist)?;
-    Ok((turns, stats))
+    cluster_and_assign(&units, target_k, duration_hist, samples.len())
 }
 
+fn frames_to_secs(frames: usize) -> f32 {
+    (frames * FRAME_SIZE) as f32 / SAMPLE_RATE as f32
+}
+
+/// Clusters the per-window speakers and turns the result into speaker turns.
 fn cluster_and_assign(
-    items: &[SegEmb],
+    units: &[WindowSpeaker],
     target_k: Option<usize>,
     duration_hist: [usize; 5],
+    samples_len: usize,
 ) -> Result<(Vec<SpeakerTurn>, DiarizeStats), String> {
-    let n_with_embed = items.iter().filter(|s| s.embedding.is_some()).count();
-    let mut anchor_idx: Vec<usize> = items
+    let n_with_embed = units.iter().filter(|u| u.embedding.is_some()).count();
+    let mut anchor_idx: Vec<usize> = units
         .iter()
         .enumerate()
-        .filter(|(_, s)| {
-            let min = std::env::var("VOXMD_DIARIZE_ANCHOR")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(MIN_ANCHOR_S);
-            s.embedding.is_some() && !s.overlap && s.duration() >= min
-        })
+        .filter(|(_, u)| u.embedding.is_some() && frames_to_secs(u.frames) >= MIN_ANCHOR_S)
         .map(|(i, _)| i)
         .collect();
 
     if anchor_idx.is_empty() {
-        // Fall back to any embedded segment so a short clip still labels.
-        let mut any: Vec<usize> = items
+        // Fall back to any embedded unit so a short clip still labels.
+        anchor_idx = units
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.embedding.is_some())
+            .filter(|(_, u)| u.embedding.is_some())
             .map(|(i, _)| i)
             .collect();
-        any.sort_by(|a, b| {
-            items[*b]
-                .duration()
-                .partial_cmp(&items[*a].duration())
-                .unwrap_or(Ordering::Equal)
-        });
-        any.truncate(MAX_ANCHORS);
-        anchor_idx = any;
-    } else if anchor_idx.len() > MAX_ANCHORS {
-        anchor_idx.sort_by(|a, b| {
-            items[*b]
-                .duration()
-                .partial_cmp(&items[*a].duration())
-                .unwrap_or(Ordering::Equal)
-        });
-        anchor_idx.truncate(MAX_ANCHORS);
     }
-
     if anchor_idx.is_empty() {
         return Err("No speaker turns found.".to_string());
     }
+    anchor_idx.sort_by(|a, b| units[*b].frames.cmp(&units[*a].frames));
+    anchor_idx.truncate(MAX_ANCHORS);
 
     let embeddings: Vec<Vec<f32>> = anchor_idx
         .iter()
-        .map(|&i| items[i].embedding.clone().unwrap_or_default())
+        .map(|&i| units[i].embedding.clone().unwrap_or_default())
         .collect();
-    let durations: Vec<f32> = anchor_idx.iter().map(|&i| items[i].duration()).collect();
+    let durations: Vec<f32> = anchor_idx
+        .iter()
+        .map(|&i| frames_to_secs(units[i].frames))
+        .collect();
 
-    let (anchor_labels, merge_distances) = agglomerative_cluster(
-        &embeddings,
-        std::env::var("VOXMD_DIARIZE_DIST")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(CLUSTER_DIST),
-        target_k,
-        AUTO_SPEAKER_CAP,
-    );
+    let (anchor_labels, merge_distances) =
+        agglomerative_cluster(&embeddings, CLUSTER_DIST, target_k, AUTO_SPEAKER_CAP);
 
     let keep = if target_k.is_none() {
-        keep_cluster_mask(
-            &anchor_labels,
-            &durations,
-            std::env::var("VOXMD_MINCLUSTER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(MIN_CLUSTER_S),
-        )
+        keep_cluster_mask(&anchor_labels, &durations, MIN_CLUSTER_S)
     } else {
         vec![true; anchor_labels.iter().copied().max().unwrap_or(0) + 1]
     };
@@ -360,14 +304,38 @@ fn cluster_and_assign(
         return Err("No speaker turns found.".to_string());
     }
 
-    let seg_labels = assign_with_continuity(items, &centroids);
-
-    let mut turns: Vec<SpeakerTurn> = items
+    // Every unit — anchors and the rest — takes the nearest centroid, then
+    // writes its label into the frames it holds. Overlapping windows vote.
+    let last_frame = units
         .iter()
-        .zip(seg_labels.iter())
-        .filter_map(|(item, lab)| lab.map(|l| (item.start, item.end, l)))
-        .collect();
-    turns = polish_turns(turns);
+        .flat_map(|u| u.spans.iter().map(|s| s.1))
+        .max()
+        .unwrap_or(0);
+    let mut votes: Vec<Vec<f32>> = vec![vec![0.0; centroids.len()]; last_frame];
+    for unit in units {
+        let Some(emb) = unit.embedding.as_deref() else {
+            continue;
+        };
+        let mut best = 0usize;
+        let mut best_d = f32::MAX;
+        for (i, c) in centroids.iter().enumerate() {
+            let d = cosine_dist(emb, c);
+            if d < best_d {
+                best_d = d;
+                best = i;
+            }
+        }
+        // A confident unit counts for more where two windows disagree.
+        let weight = (1.0 - best_d).max(0.05);
+        for &(from, to) in &unit.spans {
+            for frame in votes.iter_mut().take(to.min(last_frame)).skip(from) {
+                frame[best] += weight;
+            }
+        }
+    }
+
+    let turns = turns_from_votes(&votes, samples_len);
+    let turns = polish_turns(turns);
 
     let mut acc: HashMap<usize, f32> = HashMap::new();
     for &(start, end, id) in &turns {
@@ -377,19 +345,53 @@ fn cluster_and_assign(
     ids.sort_unstable();
     let speech_per_cluster: Vec<f32> = ids.into_iter().map(|id| acc[&id]).collect();
 
-    let first_turns = turns.iter().copied().take(40).collect();
     let stats = DiarizeStats {
-        n_segments: items.len(),
+        n_segments: units.len(),
         duration_hist,
         n_with_embed,
         n_anchors: anchor_idx.len(),
         merge_distances,
         n_clusters: speech_per_cluster.len(),
         speech_per_cluster,
-        first_turns,
+        first_turns: turns.iter().copied().take(40).collect(),
         first_turns_all: turns.clone(),
     };
     Ok((turns, stats))
+}
+
+/// Frame-level winner per frame, collapsed into turns.
+fn turns_from_votes(votes: &[Vec<f32>], samples_len: usize) -> Vec<SpeakerTurn> {
+    let rate = SAMPLE_RATE as f64;
+    let mut out: Vec<SpeakerTurn> = Vec::new();
+    let mut run: Option<(usize, usize)> = None; // (label, from_frame)
+    for f in 0..=votes.len() {
+        let winner = if f < votes.len() {
+            let total: f32 = votes[f].iter().sum();
+            if total <= 0.0 {
+                None
+            } else {
+                votes[f]
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(Ordering::Equal))
+                    .map(|(i, _)| i)
+            }
+        } else {
+            None
+        };
+        match (run, winner) {
+            (None, Some(w)) => run = Some((w, f)),
+            (Some((w, _)), Some(cur)) if cur == w => {}
+            (Some((w, from)), cur) => {
+                let a = frame_offset(0, from).min(samples_len);
+                let b = frame_offset(0, f).clamp(a, samples_len);
+                out.push(((a as f64 / rate) as f32, (b as f64 / rate) as f32, w));
+                run = cur.map(|c| (c, f));
+            }
+            (None, None) => {}
+        }
+    }
+    out
 }
 
 fn duration_histogram(durs: impl IntoIterator<Item = f32>) -> [usize; 5] {
@@ -581,82 +583,6 @@ fn centroids_from_kept(embeddings: &[Vec<f32>], labels: &[usize], keep: &[bool])
     centroids
 }
 
-/// Labels every segment, reading the sequence as a whole rather than each
-/// segment on its own.
-///
-/// Per-segment nearest-centroid is what made a single speaker flicker between
-/// two labels: an embedding that lands just past the midpoint flips, and
-/// nothing pulls it back. People do not alternate every few seconds — a switch
-/// is a real event, so it has to pay for itself.
-///
-/// Viterbi over the segments: emission is the distance to a centroid, and a
-/// change of speaker costs [`SWITCH_PENALTY`]. The penalty fades with the
-/// silence before the segment, because a pause is exactly where a turn
-/// plausibly changes; back-to-back speech has to overcome the full cost.
-/// Segments with no embedding contribute no emission at all, so the transition
-/// term carries the previous speaker across them.
-fn assign_with_continuity(items: &[SegEmb], centroids: &[Vec<f32>]) -> Vec<Option<usize>> {
-    let k = centroids.len();
-    if items.is_empty() || k == 0 {
-        return vec![None; items.len()];
-    }
-    if k == 1 {
-        return vec![Some(0); items.len()];
-    }
-
-    let emission = |i: usize, s: usize| -> f32 {
-        match items[i].embedding.as_deref() {
-            Some(e) => cosine_dist(e, &centroids[s]),
-            // No voiceprint: say nothing, let continuity decide.
-            None => 0.0,
-        }
-    };
-
-    let mut cost: Vec<f32> = (0..k).map(|s| emission(0, s)).collect();
-    let mut back: Vec<Vec<usize>> = vec![vec![0; k]; items.len()];
-
-    for i in 1..items.len() {
-        let gap = (items[i].start - items[i - 1].end).max(0.0);
-        let penalty: f32 = std::env::var("VOXMD_SWITCH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(SWITCH_PENALTY);
-        let tau: f32 = std::env::var("VOXMD_TAU")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(SWITCH_GAP_TAU_S);
-        let switch = penalty * (-gap / tau).exp();
-        let mut next = vec![0.0f32; k];
-        for s in 0..k {
-            let mut best = f32::MAX;
-            let mut best_prev = 0usize;
-            for (prev, prev_cost) in cost.iter().enumerate() {
-                let step = prev_cost + if prev == s { 0.0 } else { switch };
-                if step < best {
-                    best = step;
-                    best_prev = prev;
-                }
-            }
-            next[s] = best + emission(i, s);
-            back[i][s] = best_prev;
-        }
-        cost = next;
-    }
-
-    let mut state = cost
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let mut out = vec![None; items.len()];
-    for i in (0..items.len()).rev() {
-        out[i] = Some(state);
-        state = back[i][state];
-    }
-    out
-}
-
 fn polish_turns(mut turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
     if turns.is_empty() {
         return turns;
@@ -740,19 +666,18 @@ fn renumber_by_first_appearance(turns: &mut [SpeakerTurn]) {
     }
 }
 
-/// Runs pyannote segmentation over the whole file and returns speech runs.
+/// Runs pyannote segmentation over the whole file and returns one unit per
+/// (window, local speaker).
 ///
 /// segmentation-3.0 sees 10 s at a time and numbers the speakers it hears
-/// *within that window* — index 1 in one window and index 1 in the next are
-/// unrelated. The model is designed to be run with OVERLAPPING windows so
-/// consecutive windows can be matched up on the part they share; that is what
-/// this does, with a 50 % hop and the best of the six index permutations.
+/// *within that window*. Those indices mean nothing across windows — but inside
+/// one window they are exactly what is wanted: a single speaker's frames,
+/// separated by the model itself. Each such group is embedded and clustered on
+/// its own, and the global identity falls out of the clustering.
 ///
-/// The previous version stepped window by window and simply cut every turn at
-/// the boundary, because it had no way to carry identity across. That produced
-/// speaker changes in lockstep with the 10 s grid — 62 % of all turn boundaries
-/// landed on a multiple of ten, where chance is about 4 %. A continuous
-/// monologue came out as alternating speakers.
+/// Windows overlap by 50 %, so a speaker crossing a boundary contributes a unit
+/// on each side and the clustering ties them together. Nothing is stitched, and
+/// nothing spans a turn change.
 ///
 /// Upstream bugs fixed along the way (pyannote-rs 0.3.4 `get_segments`):
 /// 1. i16 samples must be scaled to [-1, 1] or every frame reads as non-speech
@@ -761,12 +686,12 @@ fn renumber_by_first_appearance(turns: &mut [SpeakerTurn]) {
 /// 3. The original `from_fn` stopped when a window produced no *closed*
 ///    segment — typical for a long opening utterance — losing the rest.
 /// 4. The frame counter is anchored per window (see [`frame_offset`]).
-fn speech_segments(
+fn window_speakers(
     samples: &[i16],
     sample_rate: u32,
     model_path: &Path,
     abort: &impl Fn() -> bool,
-) -> Result<Vec<SpeechSeg>, String> {
+) -> Result<Vec<WindowSpeaker>, String> {
     if samples.is_empty() {
         return Ok(Vec::new());
     }
@@ -776,10 +701,7 @@ fn speech_segments(
         return Err("Invalid sample rate for diarization.".to_string());
     }
 
-    // Global frame grid: frame g starts at sample FRAME_START + g * FRAME_SIZE.
-    // Hopping by a whole number of frames keeps every window on that grid, so
-    // a window's local frame f is simply global frame `base + f`.
-    let mut tracks: Vec<[bool; LOCAL_SPEAKERS]> = Vec::new();
+    let mut out = Vec::new();
     let mut hop_frames = 0usize;
     let mut base = 0usize;
     let mut window_start = 0usize;
@@ -809,18 +731,14 @@ fn speech_segments(
             hop_frames = (activity.len() / 2).max(1);
         }
 
-        // Match this window's arbitrary indices onto what the overlap already
-        // holds, then merge. Chained window to window, so a run stays on one
-        // track for as long as the speech itself continues.
-        let perm = best_permutation(&tracks, &activity, base);
-        if tracks.len() < base + activity.len() {
-            tracks.resize(base + activity.len(), [false; LOCAL_SPEAKERS]);
-        }
-        for (f, frame) in activity.iter().enumerate() {
-            for local in 0..LOCAL_SPEAKERS {
-                if frame[perm[local]] {
-                    tracks[base + f][local] = true;
-                }
+        for local in 0..LOCAL_SPEAKERS {
+            let (spans, frames) = spans_for(&activity, base, local);
+            if frames > 0 {
+                out.push(WindowSpeaker {
+                    spans,
+                    frames,
+                    embedding: None,
+                });
             }
         }
 
@@ -830,12 +748,7 @@ fn speech_segments(
         window_start += hop_frames * FRAME_SIZE;
         base += hop_frames;
     }
-
-    Ok(merge_short_gaps(runs_from_tracks(
-        &tracks,
-        sample_rate,
-        samples.len(),
-    )))
+    Ok(out)
 }
 
 /// One window through the model, decoded from powerset classes to per-frame
@@ -873,131 +786,6 @@ fn window_activity(
         }
     }
     Ok(activity)
-}
-
-/// Which relabelling of this window's local speakers best matches the frames
-/// the previous window already wrote.
-///
-/// Scored on frames where both agree a speaker is active; silence carries no
-/// information about identity. With nothing to compare against — the first
-/// window, or an overlap of pure silence — the identity permutation wins,
-/// which is as good a guess as any.
-fn best_permutation(
-    tracks: &[[bool; LOCAL_SPEAKERS]],
-    activity: &[[bool; LOCAL_SPEAKERS]],
-    base: usize,
-) -> [usize; LOCAL_SPEAKERS] {
-    let overlap = tracks.len().saturating_sub(base).min(activity.len());
-    if overlap == 0 {
-        return PERMUTATIONS[0];
-    }
-    let mut best = PERMUTATIONS[0];
-    let mut best_score = -1i64;
-    for perm in PERMUTATIONS {
-        let mut score = 0i64;
-        for f in 0..overlap {
-            for local in 0..LOCAL_SPEAKERS {
-                if tracks[base + f][local] && activity[f][perm[local]] {
-                    score += 1;
-                }
-            }
-        }
-        if score > best_score {
-            best_score = score;
-            best = perm;
-        }
-    }
-    best
-}
-
-/// Contiguous stretches of activity per track, as segments on the sample grid.
-fn runs_from_tracks(
-    tracks: &[[bool; LOCAL_SPEAKERS]],
-    sample_rate: u32,
-    samples_len: usize,
-) -> Vec<SpeechSeg> {
-    let rate = sample_rate as f64;
-    let mut out = Vec::new();
-    for track in 0..LOCAL_SPEAKERS {
-        let mut start: Option<usize> = None;
-        for f in 0..=tracks.len() {
-            let active = f < tracks.len() && tracks[f][track];
-            match (start, active) {
-                (None, true) => start = Some(f),
-                (Some(from), false) => {
-                    out.push(make_run(from, f, track, tracks, rate, samples_len));
-                    start = None;
-                }
-                _ => {}
-            }
-        }
-    }
-    out.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(Ordering::Equal));
-    out
-}
-
-fn make_run(
-    from: usize,
-    to: usize,
-    track: usize,
-    tracks: &[[bool; LOCAL_SPEAKERS]],
-    rate: f64,
-    samples_len: usize,
-) -> SpeechSeg {
-    let start_sample = frame_offset(0, from);
-    let end_sample = frame_offset(0, to);
-    // Any simultaneous speech at all disqualifies the run as an anchor.
-    //
-    // Tolerating a little was tried and is much worse: at 5 % the clustering
-    // collapsed from two speakers to one. A blended voiceprint sits *between*
-    // the two real ones and bridges the clusters, so a handful of clean anchors
-    // beats many contaminated ones — everything else is assigned afterwards by
-    // nearest centroid anyway.
-    let overlap = tracks[from..to]
-        .iter()
-        .any(|f| f.iter().filter(|a| **a).count() > 1);
-    SpeechSeg {
-        start: (start_sample as f64 / rate) as f32,
-        end: (end_sample as f64 / rate) as f32,
-        range: (
-            start_sample.min(samples_len),
-            end_sample.clamp(start_sample.min(samples_len), samples_len),
-        ),
-        track,
-        overlap,
-    }
-}
-
-/// Bridges breath-length pauses inside one track.
-///
-/// Window boundaries no longer split anything — the tracks are stitched across
-/// them — so this is only about pauses. The ceiling keeps a long monologue from
-/// becoming one segment: a shorter run is a better voiceprint, and turns need
-/// somewhere to land.
-fn merge_short_gaps(segs: Vec<SpeechSeg>) -> Vec<SpeechSeg> {
-    let mut out: Vec<SpeechSeg> = Vec::with_capacity(segs.len());
-    for seg in segs {
-        if let Some(last) = out.last_mut() {
-            let gap = seg.start - last.end;
-            if last.track == seg.track
-                && (0.0..MERGE_GAP_S).contains(&gap)
-                && seg.end - last.start
-                    <= std::env::var("VOXMD_MAXJOIN")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(MAX_JOINED_S)
-            {
-                last.end = seg.end;
-                // The pause is kept rather than spliced out: a discontinuity
-                // would be audible to the embedder.
-                last.range.1 = seg.range.1.max(last.range.1);
-                last.overlap = last.overlap || seg.overlap;
-                continue;
-            }
-        }
-        out.push(seg);
-    }
-    out
 }
 
 fn argmax(values: impl IntoIterator<Item = f32>) -> Result<usize, String> {
@@ -1176,6 +964,69 @@ mod tests {
         assert_eq!((3600 / 10) * 970 / SAMPLE_RATE as usize, 21);
     }
 
+    /// The unit that gets embedded must be one speaker's frames and nothing
+    /// else — that is the whole point of clustering per window speaker.
+    #[test]
+    fn spans_cover_exactly_one_local_speaker() {
+        let mut activity = vec![[false; LOCAL_SPEAKERS]; 10];
+        for frame in activity.iter_mut().take(4).skip(1) {
+            frame[0] = true;
+        }
+        for frame in activity.iter_mut().take(9).skip(6) {
+            frame[0] = true;
+        }
+        for frame in activity.iter_mut().take(8).skip(2) {
+            frame[1] = true;
+        }
+
+        let (spans, frames) = spans_for(&activity, 100, 0);
+        assert_eq!(spans, vec![(101, 104), (106, 109)]);
+        assert_eq!(frames, 6);
+
+        let (spans, frames) = spans_for(&activity, 100, 1);
+        assert_eq!(spans, vec![(102, 108)]);
+        assert_eq!(frames, 6);
+
+        // A speaker the window never heard produces no unit at all.
+        let (spans, frames) = spans_for(&activity, 100, 2);
+        assert!(spans.is_empty());
+        assert_eq!(frames, 0);
+    }
+
+    #[test]
+    fn votes_collapse_into_turns() {
+        // Frames 0..3 speaker 0, 3..5 speaker 1, 5..6 silent, 6..8 speaker 0.
+        let mut votes = vec![vec![0.0f32; 2]; 8];
+        for v in votes.iter_mut().take(3) {
+            v[0] = 1.0;
+        }
+        for v in votes.iter_mut().take(5).skip(3) {
+            v[1] = 1.0;
+        }
+        for v in votes.iter_mut().take(8).skip(6) {
+            v[0] = 1.0;
+        }
+        let turns = turns_from_votes(&votes, usize::MAX);
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0].2, 0);
+        assert_eq!(turns[1].2, 1);
+        assert_eq!(turns[2].2, 0);
+        // The silent frame ends a turn rather than joining either side.
+        assert!(turns[1].1 < turns[2].0);
+    }
+
+    #[test]
+    fn overlapping_windows_vote_and_the_confident_one_wins() {
+        let mut votes = vec![vec![0.0f32; 2]; 4];
+        for v in votes.iter_mut() {
+            v[0] = 0.3; // a hesitant window
+            v[1] = 0.9; // a confident one covering the same frames
+        }
+        let turns = turns_from_votes(&votes, usize::MAX);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].2, 1);
+    }
+
     #[test]
     fn argmax_picks_largest() {
         assert_eq!(argmax([0.1, 0.9, 0.2]).unwrap(), 1);
@@ -1195,133 +1046,6 @@ mod tests {
         assert_eq!(POWERSET[6], &[1, 2]);
         for pair in &POWERSET[4..7] {
             assert_eq!(pair.len(), 2);
-        }
-    }
-
-    #[test]
-    fn permutations_are_the_six_distinct_relabellings() {
-        assert_eq!(PERMUTATIONS.len(), 6);
-        let mut seen: Vec<[usize; LOCAL_SPEAKERS]> = PERMUTATIONS.to_vec();
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), 6);
-        for p in PERMUTATIONS {
-            let mut sorted = p;
-            sorted.sort_unstable();
-            assert_eq!(sorted, [0, 1, 2]);
-        }
-        // The identity must come first: it is the fallback with nothing to match.
-        assert_eq!(PERMUTATIONS[0], [0, 1, 2]);
-    }
-
-    /// The heart of the stitching. A window's speaker indices are arbitrary, so
-    /// the one that continues the previous window has to be found by overlap.
-    #[test]
-    fn stitching_recovers_a_swapped_window() {
-        // Global so far: track 0 talking, track 1 silent.
-        let tracks: Vec<[bool; LOCAL_SPEAKERS]> = (0..10).map(|_| [true, false, false]).collect();
-        // The next window heard the same voice but numbered it 1.
-        let activity: Vec<[bool; LOCAL_SPEAKERS]> = (0..10).map(|_| [false, true, false]).collect();
-        // Overlap covers the last 5 frames.
-        let perm = best_permutation(&tracks, &activity, 5);
-        assert_eq!(perm[0], 1, "track 0 must map onto the window's speaker 1");
-    }
-
-    #[test]
-    fn stitching_falls_back_to_identity_without_evidence() {
-        let silent: Vec<[bool; LOCAL_SPEAKERS]> = (0..8).map(|_| [false; LOCAL_SPEAKERS]).collect();
-        let some: Vec<[bool; LOCAL_SPEAKERS]> = (0..8).map(|_| [true, false, false]).collect();
-        // No previous frames at all.
-        assert_eq!(best_permutation(&[], &some, 0), [0, 1, 2]);
-        // An overlap of pure silence says nothing about identity.
-        assert_eq!(best_permutation(&silent, &some, 0), [0, 1, 2]);
-    }
-
-    #[test]
-    fn runs_are_contiguous_activity_per_track() {
-        let mut tracks = vec![[false; LOCAL_SPEAKERS]; 10];
-        for frame in tracks.iter_mut().take(6).skip(2) {
-            frame[0] = true;
-        }
-        for frame in tracks.iter_mut().take(8).skip(4) {
-            frame[1] = true;
-        }
-        let runs = runs_from_tracks(&tracks, SAMPLE_RATE, usize::MAX);
-        assert_eq!(runs.len(), 2);
-        // Sorted by start time, and the shared frames 4..6 count as overlap.
-        assert_eq!(runs[0].track, 0);
-        assert_eq!(runs[1].track, 1);
-        assert!(runs[0].overlap && runs[1].overlap);
-        assert_eq!(runs[0].range.0, frame_offset(0, 2));
-        assert_eq!(runs[0].range.1, frame_offset(0, 6));
-    }
-
-    #[test]
-    fn a_lone_track_is_not_marked_as_overlap() {
-        let mut tracks = vec![[false; LOCAL_SPEAKERS]; 6];
-        for frame in tracks.iter_mut().take(4).skip(1) {
-            frame[2] = true;
-        }
-        let runs = runs_from_tracks(&tracks, SAMPLE_RATE, usize::MAX);
-        assert_eq!(runs.len(), 1);
-        assert!(!runs[0].overlap);
-        assert_eq!(runs[0].track, 2);
-    }
-
-    fn seg(start: f32, end: f32, range: (usize, usize), track: usize) -> SpeechSeg {
-        SpeechSeg {
-            start,
-            end,
-            range,
-            track,
-            overlap: false,
-        }
-    }
-
-    #[test]
-    fn merge_short_gaps_same_window_and_class() {
-        let all = vec![1_i16, 2, 3, 4];
-        let merged = merge_short_gaps(vec![seg(0.0, 1.0, (0, 2), 0), seg(1.1, 2.0, (3, 4), 0)]);
-        assert_eq!(merged.len(), 1);
-        assert!((merged[0].end - 2.0).abs() < f32::EPSILON);
-        // The range spans the merged pair, gap included.
-        assert_eq!(merged[0].samples(&all), &[1, 2, 3, 4]);
-    }
-
-    /// Pauses inside one track bridge; a real silence ends the segment.
-    #[test]
-    fn short_pauses_bridge_within_a_track() {
-        let joined = merge_short_gaps(vec![seg(0.0, 9.98, (0, 1), 0), seg(10.05, 19.9, (1, 2), 0)]);
-        assert_eq!(joined.len(), 1);
-        assert!((joined[0].end - 19.9).abs() < f32::EPSILON);
-
-        // 0.6 s of silence: room for a speaker change, so it stays split.
-        let split = merge_short_gaps(vec![seg(0.0, 9.4, (0, 1), 0), seg(10.05, 19.9, (1, 2), 0)]);
-        assert_eq!(split.len(), 2);
-
-        // Different tracks never merge, however close.
-        let other = merge_short_gaps(vec![seg(0.0, 9.98, (0, 1), 0), seg(10.0, 19.9, (1, 2), 1)]);
-        assert_eq!(other.len(), 2);
-    }
-
-    /// Without a ceiling, continuous speech chains into one segment spanning
-    /// minutes — a worse voiceprint and no turn resolution left.
-    #[test]
-    fn joining_stops_at_the_length_ceiling() {
-        let mut segs = Vec::new();
-        let mut t = 0.0f32;
-        for _ in 0..8 {
-            segs.push(seg(t, t + 9.95, (0, 1), 0));
-            t += 10.0;
-        }
-        let out = merge_short_gaps(segs);
-        assert!(out.len() > 1, "everything collapsed into one segment");
-        for s in &out {
-            assert!(
-                s.end - s.start <= MAX_JOINED_S + 0.1,
-                "{:.1}s exceeds the ceiling",
-                s.end - s.start
-            );
         }
     }
 
@@ -1358,15 +1082,6 @@ mod tests {
         let (labels, _) = agglomerative_cluster(&embs, 0.01, Some(2), AUTO_SPEAKER_CAP);
         let n = labels.iter().copied().max().unwrap() + 1;
         assert_eq!(n, 2);
-    }
-
-    #[test]
-    fn dissolve_drops_tiny_cluster() {
-        let labels = vec![0, 0, 0, 1];
-        let durs = vec![5.0, 5.0, 5.0, 0.4];
-        let keep = keep_cluster_mask(&labels, &durs, MIN_CLUSTER_S);
-        assert!(keep[0]);
-        assert!(!keep[1]);
     }
 
     #[test]
