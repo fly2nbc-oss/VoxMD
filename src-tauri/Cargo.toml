@@ -70,7 +70,7 @@ pyannote-rs = { version = "0.3", features = ["load-dynamic"] }
 # to a bare `get()`, so `load-dynamic` never runs and the first Session panics
 # with "attempted to use `ort` APIs before initializing a backend". The build
 # and every unit test still pass; only real diarization breaks.
-ort = { version = "=2.0.0-rc.10", default-features = false, features = [
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
     "ndarray",
     "std",
     "load-dynamic",
