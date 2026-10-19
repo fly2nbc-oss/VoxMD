@@ -9,7 +9,10 @@ use ort::value::TensorRef;
 
 use crate::audio::SAMPLE_RATE;
 use crate::config::MAX_SPEAKERS_CAP;
-use crate::llm::{format_transcript, smooth_speaker_outliers, speakers_for_lines, TranscriptLine};
+use crate::llm::{
+    format_transcript, smooth_speaker_outliers, speakers_for_lines, split_lines_at_turns,
+    TranscriptLine,
+};
 use crate::model_download;
 use crate::onnx_runtime;
 
@@ -63,6 +66,12 @@ const MAX_ANCHORS: usize = 600;
 const CLUSTER_DIST: f32 = 0.45;
 /// Drop clusters whose total anchored speech is shorter than this (auto mode).
 const MIN_CLUSTER_S: f32 = 3.0;
+/// A speaker too short to embed still takes the one cluster its window leaves
+/// free — if it holds at least this much speech …
+const MIN_UNEMBEDDED_S: f32 = 1.0;
+/// … and with this weight: more than any single embedded vote (at most 1.0),
+/// or it could not outvote the unit that swallowed the reply.
+const UNEMBEDDED_WEIGHT: f32 = 1.5;
 /// Turns shorter than this are absorbed into the longer neighbour.
 const MIN_TURN_S: f32 = 0.4;
 
@@ -141,6 +150,9 @@ fn to_i16(samples: &[f32]) -> Vec<i16> {
 /// anchors sat between the two voices and the clustering grouped blends —
 /// five clusters for two speakers, with no threshold able to fix it.
 struct WindowSpeaker {
+    /// Which analysis window this local speaker belongs to. Local speakers of
+    /// one window are different people by construction.
+    window: usize,
     /// Global frame indices this speaker holds, as `[from, to)` spans.
     spans: Vec<(usize, usize)>,
     frames: usize,
@@ -205,9 +217,10 @@ pub fn label_transcript(
     if turns.is_empty() {
         return Err("No speaker turns found.".to_string());
     }
-    let mut assigned = speakers_for_lines(lines, &turns);
-    smooth_speaker_outliers(lines, &mut assigned);
-    Ok(format_transcript(lines, &assigned))
+    let lines = split_lines_at_turns(lines, &turns);
+    let mut assigned = speakers_for_lines(&lines, &turns);
+    smooth_speaker_outliers(&lines, &mut assigned);
+    Ok(format_transcript(&lines, &assigned))
 }
 
 fn run_diarize(
@@ -382,6 +395,9 @@ fn cluster_and_assign(
         .max()
         .unwrap_or(0);
     let mut votes: Vec<Vec<f32>> = vec![vec![0.0; centroids.len()]; last_frame];
+    // Which clusters the embedded speakers of each window took. A short speaker
+    // in the same window — too brief to embed — is none of those.
+    let mut taken: HashMap<usize, Vec<usize>> = HashMap::new();
     for unit in units {
         let Some(emb) = unit.embedding.as_deref() else {
             continue;
@@ -400,6 +416,60 @@ fn cluster_and_assign(
         for &(from, to) in &unit.spans {
             for frame in votes.iter_mut().take(to.min(last_frame)).skip(from) {
                 frame[best] += weight;
+            }
+        }
+        let used = taken.entry(unit.window).or_default();
+        if !used.contains(&best) {
+            used.push(best);
+        }
+    }
+
+    // A reply of a few seconds is shorter than the excerpt the embedder needs, so
+    // it got no vote of its own. Worse, the embedded unit of an *earlier* window
+    // often swallowed it (a quick change of voice sits inside one local speaker
+    // there), and `merge_adjacent_turns` closed the rest — the guest's
+    // three-second greeting read as the host. Local speakers of one window are
+    // different people, so within a window: the bigger unit keeps the label its
+    // frames already lean to, and a smaller one that leans to the same label is
+    // moved to the one cluster still free. Skipped when more than one is free.
+    let mut by_window: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, unit) in units.iter().enumerate() {
+        if unit.embedding.is_none() && frames_to_secs(unit.frames) >= MIN_UNEMBEDDED_S {
+            by_window.entry(unit.window).or_default().push(i);
+        }
+    }
+    for (window, mut members) in by_window {
+        members.sort_by_key(|&i| std::cmp::Reverse(units[i].frames));
+        let mut claimed = taken.get(&window).cloned().unwrap_or_default();
+        for i in members {
+            let unit = &units[i];
+            let mut mass = vec![0.0f32; centroids.len()];
+            for &(from, to) in &unit.spans {
+                for frame in votes.iter().take(to.min(last_frame)).skip(from) {
+                    for (m, v) in mass.iter_mut().zip(frame) {
+                        *m += v;
+                    }
+                }
+            }
+            let lean = mass
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| **m > 0.0)
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(Ordering::Equal))
+                .map(|(c, _)| c);
+            if let Some(c) = lean.filter(|c| !claimed.contains(c)) {
+                claimed.push(c);
+                continue;
+            }
+            let mut left = (0..centroids.len()).filter(|c| !claimed.contains(c));
+            let (Some(only), None) = (left.next(), left.next()) else {
+                continue;
+            };
+            claimed.push(only);
+            for &(from, to) in &unit.spans {
+                for frame in votes.iter_mut().take(to.min(last_frame)).skip(from) {
+                    frame[only] += UNEMBEDDED_WEIGHT;
+                }
             }
         }
     }
@@ -768,6 +838,7 @@ fn window_speakers(
     let mut hop_frames = 0usize;
     let mut base = 0usize;
     let mut window_start = 0usize;
+    let mut window_index = 0usize;
     let mut scratch: Vec<i16> = Vec::new();
 
     while window_start < samples.len() {
@@ -798,6 +869,7 @@ fn window_speakers(
             let (spans, frames) = spans_for(&activity, base, local);
             if frames > 0 {
                 out.push(WindowSpeaker {
+                    window: window_index,
                     spans,
                     frames,
                     embedding: None,
@@ -810,6 +882,7 @@ fn window_speakers(
         }
         window_start += hop_frames * FRAME_SIZE;
         base += hop_frames;
+        window_index += 1;
     }
     Ok(out)
 }
@@ -1147,6 +1220,46 @@ mod tests {
         assert_eq!(n, 2);
     }
 
+    /// The guest's short greeting sits inside the host's embedded unit of one
+    /// window, and in the next window only unembedded fragments describe it. The
+    /// smaller fragment must move to the free cluster.
+    #[test]
+    fn a_reply_swallowed_by_an_earlier_window_goes_to_the_other_cluster() {
+        let unit = |window: usize, spans: Vec<(usize, usize)>, emb: Option<Vec<f32>>| {
+            let frames = spans.iter().map(|s| s.1 - s.0).sum();
+            WindowSpeaker {
+                window,
+                spans,
+                frames,
+                embedding: emb,
+            }
+        };
+        let host = vec2(1.0, 0.0);
+        let guest = vec2(0.0, 1.0);
+        let units = vec![
+            unit(0, vec![(0, 300)], Some(host.clone())),
+            unit(1, vec![(300, 600)], Some(guest.clone())),
+            unit(2, vec![(600, 900)], Some(host.clone())),
+            unit(3, vec![(900, 1200)], Some(guest.clone())),
+            // Window 4: one embedded host unit that swallowed frames 1350–1450.
+            unit(4, vec![(1200, 1600)], Some(host.clone())),
+            // Window 5: two fragments, neither long enough to embed.
+            unit(5, vec![(1200, 1350), (1450, 1600)], None),
+            unit(5, vec![(1350, 1450)], None),
+        ];
+        let (turns, _) = cluster_and_assign(&units, None, [0; 5], 2_000_000, 4.0).expect("cluster");
+        let at = |frame: usize| {
+            let t = frame_offset(0, frame) as f32 / SAMPLE_RATE as f32;
+            turns
+                .iter()
+                .find(|(a, b, _)| *a <= t && t < *b)
+                .map(|t| t.2)
+                .expect("a turn at this frame")
+        };
+        assert_ne!(at(1400), at(1300), "the reply is the other speaker");
+        assert_eq!(at(1500), at(1300), "the host goes on afterwards");
+    }
+
     #[test]
     fn absorb_short_turn_into_neighbours() {
         let turns = vec![(0.0, 5.0, 0), (5.0, 5.2, 1), (5.2, 10.0, 0)];
@@ -1256,6 +1369,7 @@ mod tests {
     #[test]
     fn embed_span_keeps_a_breath_but_ends_at_the_other_voice() {
         let unit = |spans: Vec<(usize, usize)>| WindowSpeaker {
+            window: 0,
             spans,
             frames: 0,
             embedding: None,
@@ -1688,6 +1802,12 @@ mod quality {
         .expect("diarize");
         let mut pred = speakers_for_lines(&lines, &turns);
         smooth_speaker_outliers(&lines, &mut pred);
+        // The same lines, cut where the speaker changes inside one: what the
+        // transcript really contains now. Scored against the same reference
+        // by the whole line each piece came from would be unfair, so this is
+        // reported as its own count of extra lines.
+        let split = split_lines_at_turns(&lines, &turns);
+        eprintln!("ZEILEN GETEILT  {} -> {} Zeilen", lines.len(), split.len());
 
         // A metric that a constant predictor can win measures nothing. Report the
         // majority-class rate alongside, and the confusion, so that is visible.

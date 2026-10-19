@@ -460,6 +460,138 @@ pub fn format_transcript(lines: &[TranscriptLine], speakers: &[Option<usize>]) -
     out.join("\n")
 }
 
+/// A split piece must last at least this long, or it stays part of its neighbour.
+/// Equal to the outlier limit of `smooth_speaker_outliers`, so smoothing never
+/// undoes an interjection that was split off on purpose.
+const MIN_PIECE_S: f32 = 1.5;
+
+/// Splits Whisper lines where the speaker changes *inside* a line.
+///
+/// Whisper segments run to ten seconds and more, so a short reply ("Ja, genau.")
+/// used to ride along with the longer turn around it. Each line is cut at the
+/// turn boundaries it contains. Whisper gives no word times here, so the text
+/// is cut in proportion to the time, snapped to a word break (a sentence end is
+/// preferred). Pieces under `MIN_PIECE_S` or without a word are merged back, so a
+/// line without a clear change comes out unchanged.
+pub fn split_lines_at_turns(
+    lines: &[TranscriptLine],
+    turns: &[(f32, f32, usize)],
+) -> Vec<TranscriptLine> {
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        out.extend(split_line(line, turns));
+    }
+    out
+}
+
+fn split_line(line: &TranscriptLine, turns: &[(f32, f32, usize)]) -> Vec<TranscriptLine> {
+    let dur = line.end - line.start;
+    if dur < 2.0 * MIN_PIECE_S {
+        return vec![line.clone()];
+    }
+    // Stretches of one speaker inside the line, in time order, gaps closed at the middle.
+    let mut parts: Vec<(f32, f32, usize)> = Vec::new();
+    for &(start, end, speaker) in turns {
+        if interval_overlap(line.start, line.end, start, end) <= 0.0 {
+            continue;
+        }
+        let (start, end) = (start.max(line.start), end.min(line.end));
+        match parts.last_mut() {
+            Some(last) if last.2 == speaker => last.1 = last.1.max(end),
+            Some(last) => {
+                let cut = ((last.1 + start) / 2.0).max(last.0).min(end);
+                last.1 = cut;
+                parts.push((cut, end, speaker));
+            }
+            None => parts.push((start, end, speaker)),
+        }
+    }
+    // Too-short stretches join the longer neighbour; same-speaker neighbours fuse.
+    while let Some(i) = parts
+        .iter()
+        .position(|p| p.1 - p.0 < MIN_PIECE_S && parts.len() > 1)
+    {
+        let len = |k: usize| parts[k].1 - parts[k].0;
+        let into_prev = i > 0 && (i + 1 == parts.len() || len(i - 1) >= len(i + 1));
+        let j = if into_prev { i - 1 } else { i + 1 };
+        let (a, b) = (parts[j].0.min(parts[i].0), parts[j].1.max(parts[i].1));
+        parts[j].0 = a;
+        parts[j].1 = b;
+        parts.remove(i);
+        let k = if into_prev { i - 1 } else { i };
+        if k + 1 < parts.len() && parts[k].2 == parts[k + 1].2 {
+            parts[k].1 = parts[k + 1].1;
+            parts.remove(k + 1);
+        }
+    }
+    if parts.len() < 2 {
+        return vec![line.clone()];
+    }
+    // The first piece starts with the line, the last ends with it.
+    parts[0].0 = line.start;
+    let last = parts.len() - 1;
+    parts[last].1 = line.end;
+
+    let text = line.text.as_str();
+    let total = text.chars().count().max(1) as f32;
+    let breaks = word_breaks(text);
+    let mut cuts: Vec<(usize, f32)> = Vec::new(); // (byte offset, time)
+    for p in &parts[1..] {
+        let target = (p.0 - line.start) / dur * total;
+        let best = breaks
+            .iter()
+            .filter(|b| cuts.last().is_none_or(|c| b.0 > c.0))
+            .min_by(|a, b| {
+                let score = |w: &(usize, usize, bool)| {
+                    let d = (w.1 as f32 - target).abs();
+                    if w.2 {
+                        d * 0.4
+                    } else {
+                        d
+                    }
+                };
+                score(a).total_cmp(&score(b))
+            });
+        match best {
+            Some(b) => cuts.push((b.0, p.0)),
+            None => return vec![line.clone()],
+        }
+    }
+    let mut pieces = Vec::with_capacity(parts.len());
+    let mut from = (0usize, line.start);
+    for idx in 0..parts.len() {
+        let (to_byte, to_time) = cuts.get(idx).copied().unwrap_or((text.len(), line.end));
+        let piece = text[from.0..to_byte].trim();
+        if piece.is_empty() {
+            return vec![line.clone()];
+        }
+        pieces.push(TranscriptLine {
+            start: from.1,
+            end: if idx == last { line.end } else { to_time },
+            text: piece.to_string(),
+        });
+        from = (to_byte, to_time);
+    }
+    pieces
+}
+
+/// Byte offsets where a word starts (not the first), with the char count before
+/// it and whether a sentence end precedes it.
+fn word_breaks(text: &str) -> Vec<(usize, usize, bool)> {
+    let mut out = Vec::new();
+    let mut prev: Option<char> = None;
+    for (chars, (byte, c)) in text.char_indices().enumerate() {
+        if let Some(p) = prev {
+            if p.is_whitespace() && !c.is_whitespace() {
+                let before = text[..byte].trim_end().chars().last();
+                out.push((byte, chars, matches!(before, Some('.' | '?' | '!'))));
+            }
+        }
+        prev = Some(c);
+    }
+    out
+}
+
 /// Assign each Whisper line the speaker whose turn overlaps it the most.
 /// Lines with no overlap inherit the previous speaker (then the next, for a
 /// leading gap).
@@ -699,8 +831,8 @@ mod tests {
     use super::{
         fmt_ts, format_transcript, interval_overlap, looks_like_context_overflow, parse_model_ids,
         rejects_sampling_params, rewrite_max_tokens, smooth_speaker_outliers, speakers_for_lines,
-        split_transcript_parts_capped, summary_system_prompt, TranscriptLine, REWRITE_MAX_TOKENS,
-        REWRITE_MIN_TOKENS, SUMMARY_MAX_PARTS, SUMMARY_MIN_PART_CHARS,
+        split_lines_at_turns, split_transcript_parts_capped, summary_system_prompt, TranscriptLine,
+        REWRITE_MAX_TOKENS, REWRITE_MIN_TOKENS, SUMMARY_MAX_PARTS, SUMMARY_MIN_PART_CHARS,
         SUMMARY_SINGLE_CALL_MAX_CHARS,
     };
 
@@ -853,6 +985,57 @@ mod tests {
         let assigned = speakers_for_lines(&lines, &turns);
         assert_eq!(assigned, vec![Some(2)]);
         assert!(interval_overlap(0.0, 1.0, 2.0, 3.0) == 0.0);
+    }
+
+    #[test]
+    fn a_short_reply_inside_a_long_line_becomes_its_own_line() {
+        let lines = [line(
+            0.0,
+            12.0,
+            "Das ist der erste lange Satz des Gastgebers. Ja, genau so war das gemeint. Und dann ging es weiter mit dem Thema.",
+        )];
+        let turns = [(0.0, 4.5, 1), (4.5, 8.0, 2), (8.0, 12.0, 1)];
+        let split = split_lines_at_turns(&lines, &turns);
+        assert_eq!(split.len(), 3);
+        assert_eq!(split[1].text, "Ja, genau so war das gemeint.");
+        assert_eq!((split[1].start, split[1].end), (4.5, 8.0));
+        assert_eq!(split[0].start, 0.0);
+        assert_eq!(split[2].end, 12.0);
+        let joined: Vec<_> = split.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(joined.join(" "), lines[0].text);
+        let speakers = speakers_for_lines(&split, &turns);
+        assert_eq!(speakers, vec![Some(1), Some(2), Some(1)]);
+    }
+
+    #[test]
+    fn lines_without_a_clear_change_stay_whole() {
+        let l = line(0.0, 12.0, "eins zwei drei vier fünf sechs sieben acht");
+        // one speaker; a flicker under the minimum; a short line
+        for turns in [
+            vec![(0.0, 12.0, 1)],
+            vec![(0.0, 6.0, 1), (6.0, 6.8, 2), (6.8, 12.0, 1)],
+        ] {
+            assert_eq!(
+                split_lines_at_turns(std::slice::from_ref(&l), &turns),
+                vec![l.clone()]
+            );
+        }
+        let short = line(0.0, 2.5, "kurz und knapp");
+        let turns = [(0.0, 1.2, 1), (1.2, 2.5, 2)];
+        assert_eq!(
+            split_lines_at_turns(std::slice::from_ref(&short), &turns),
+            vec![short]
+        );
+    }
+
+    #[test]
+    fn a_split_never_loses_or_empties_text() {
+        let l = line(0.0, 6.0, "Wort");
+        let turns = [(0.0, 3.0, 1), (3.0, 6.0, 2)];
+        assert_eq!(
+            split_lines_at_turns(std::slice::from_ref(&l), &turns),
+            vec![l]
+        );
     }
 
     #[test]
