@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+### Changed
+
+- **Speaker labels follow short replies of two seconds and more.** Besides the long stretches, every second of single-speaker speech is now compared on its own with the speakers' voices, so a reply that the longer stretch around it used to swallow gets its own turn. Replies of about a second or less ("Ja", "Genau") are still too short for the voice model and stay with the speaker around them. Diarization takes longer: about two minutes for a 50-minute episode instead of one.
+
 ## [1.2.0] - 2026-10-19
 
 Includes everything listed under 1.1.0, which was never tagged.

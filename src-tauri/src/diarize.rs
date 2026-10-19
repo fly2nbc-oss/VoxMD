@@ -72,6 +72,21 @@ const MIN_UNEMBEDDED_S: f32 = 1.0;
 /// … and with this weight: more than any single embedded vote (at most 1.0),
 /// or it could not outvote the unit that swallowed the reply.
 const UNEMBEDDED_WEIGHT: f32 = 1.5;
+/// The fine pass: one 2 s excerpt centred on every second of single-speaker
+/// speech, each classified on its own and voting for that second. It exists for
+/// replies too short to embed at 4–6 s and for ones the longer unit around them
+/// swallowed. **2 s is not a free choice.** Measured on a three-person episode
+/// (nearest centroid, leave-one-out, neighbours within 10 s excluded): 2 s and
+/// 4 s classify 99.8 %, but 1 s 66 %, 1.5 s 84 %, 2.5 s 76 %, 3 s 81 %. Measure
+/// (`quality::short_excerpt_accuracy`) before changing it.
+const FINE_S: usize = 2;
+/// Fine votes against the unit votes (each at most 1.0, two windows overlap).
+/// Enough that one clean 2 s reading outvotes a unit that swallowed it.
+const FINE_WEIGHT: f32 = 1.0;
+/// Fine centroids come only from units this close to their 6 s centroid.
+const FINE_CENTROID_DIST: f32 = 0.3;
+/// Fewer fine excerpts than this for any speaker and the fine pass is skipped.
+const FINE_MIN_PER_SPEAKER: usize = 5;
 /// Turns shorter than this are absorbed into the longer neighbour.
 const MIN_TURN_S: f32 = 0.4;
 
@@ -266,7 +281,36 @@ fn run_diarize(
         }
     }
 
-    cluster_and_assign(&units, target_k, duration_hist, samples.len(), embed_len)
+    // The fine pass: every second of single-speaker speech, embedded once however
+    // many overlapping windows contain it (the excerpt depends only on the audio).
+    let mut seconds: Vec<usize> = units
+        .iter()
+        .flat_map(|u| fine_seconds(u, samples.len()))
+        .collect();
+    seconds.sort_unstable();
+    seconds.dedup();
+    let rate = SAMPLE_RATE as usize;
+    let mut fine: HashMap<usize, Vec<f32>> = HashMap::new();
+    for k in seconds {
+        if abort() {
+            return Err("Cancelled.".to_string());
+        }
+        let (a, b) = ((k - FINE_S / 2) * rate, (k + FINE_S / 2) * rate);
+        if let Ok(iter) = extractor.compute(&samples[a..b]) {
+            let mut v: Vec<f32> = iter.collect();
+            l2_normalize(&mut v);
+            fine.insert(k, v);
+        }
+    }
+
+    cluster_and_assign(
+        &units,
+        target_k,
+        duration_hist,
+        samples.len(),
+        embed_len,
+        &fine,
+    )
 }
 
 /// The stretch of a unit that gets embedded.
@@ -293,22 +337,49 @@ fn pick_embed_len(runs: &[Option<(usize, usize)>], samples_len: usize) -> f32 {
         .unwrap_or(last)
 }
 
-fn embed_span(unit: &WindowSpeaker) -> Option<(usize, usize)> {
-    let longer = |c: &Option<(usize, usize)>| c.map_or(0, |(a, b)| b - a);
-    let mut best: Option<(usize, usize)> = None;
-    let mut run: Option<(usize, usize)> = None;
+/// A unit's stretches of speech, as `[from, to)` frames: spans closer than
+/// [`MAX_EMBED_GAP_S`] are one run with a breath in it.
+fn unit_runs(unit: &WindowSpeaker) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
     for &(from, to) in &unit.spans {
-        run = match run {
-            Some((a, b)) if frames_to_secs(from.saturating_sub(b)) <= MAX_EMBED_GAP_S => {
-                Some((a, to))
+        match runs.last_mut() {
+            Some(last) if frames_to_secs(from.saturating_sub(last.1)) <= MAX_EMBED_GAP_S => {
+                last.1 = to;
             }
-            other => {
-                best = std::cmp::max_by_key(best, other, longer);
-                Some((from, to))
-            }
-        };
+            _ => runs.push((from, to)),
+        }
     }
-    std::cmp::max_by_key(best, run, longer)
+    runs
+}
+
+fn embed_span(unit: &WindowSpeaker) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+    for run in unit_runs(unit) {
+        // `>=`: on a tie the later run wins, as it always did.
+        if best.is_none_or(|b| run.1 - run.0 >= b.1 - b.0) {
+            best = Some(run);
+        }
+    }
+    best
+}
+
+/// Whole seconds `k` whose 2 s excerpt `[k-1, k+1)` lies inside one run of the
+/// unit — audio that is one speaker by construction.
+fn fine_seconds(unit: &WindowSpeaker, samples_len: usize) -> Vec<usize> {
+    let rate = SAMPLE_RATE as usize;
+    let half = FINE_S / 2;
+    let mut out = Vec::new();
+    for (from, to) in unit_runs(unit) {
+        let a = frame_offset(0, from);
+        let b = frame_offset(0, to).min(samples_len);
+        let first = a.div_ceil(rate) + half;
+        let mut k = first.max(half);
+        while (k + half) * rate <= b {
+            out.push(k);
+            k += 1;
+        }
+    }
+    out
 }
 
 /// The exact slice handed to the embedder: `want_s` seconds centred in the run,
@@ -340,6 +411,7 @@ fn cluster_and_assign(
     duration_hist: [usize; 5],
     samples_len: usize,
     min_anchor_s: f32,
+    fine: &HashMap<usize, Vec<f32>>,
 ) -> Result<(Vec<SpeakerTurn>, DiarizeStats), String> {
     let n_with_embed = units.iter().filter(|u| u.embedding.is_some()).count();
     let mut anchor_idx: Vec<usize> = units
@@ -398,7 +470,8 @@ fn cluster_and_assign(
     // Which clusters the embedded speakers of each window took. A short speaker
     // in the same window — too brief to embed — is none of those.
     let mut taken: HashMap<usize, Vec<usize>> = HashMap::new();
-    for unit in units {
+    let mut confident: Vec<(usize, usize)> = Vec::new(); // (unit index, cluster)
+    for (unit_index, unit) in units.iter().enumerate() {
         let Some(emb) = unit.embedding.as_deref() else {
             continue;
         };
@@ -422,7 +495,19 @@ fn cluster_and_assign(
         if !used.contains(&best) {
             used.push(best);
         }
+        if best_d <= FINE_CENTROID_DIST {
+            confident.push((unit_index, best));
+        }
     }
+
+    add_fine_votes(
+        units,
+        &confident,
+        fine,
+        centroids.len(),
+        samples_len,
+        &mut votes,
+    );
 
     // A reply of a few seconds is shorter than the excerpt the embedder needs, so
     // it got no vote of its own. Worse, the embedded unit of an *earlier* window
@@ -497,6 +582,60 @@ fn cluster_and_assign(
         first_turns_all: turns.clone(),
     };
     Ok((turns, stats))
+}
+
+/// The fine pass's votes. Its own centroids: the mean 2 s excerpt of every
+/// confidently assigned unit, per speaker — a 2 s excerpt is not comparable to
+/// a 6 s centroid. Each second then votes for the nearest one, on the frames
+/// around that second.
+fn add_fine_votes(
+    units: &[WindowSpeaker],
+    confident: &[(usize, usize)],
+    fine: &HashMap<usize, Vec<f32>>,
+    clusters: usize,
+    samples_len: usize,
+    votes: &mut [Vec<f32>],
+) {
+    let Some(dim) = fine.values().next().map(Vec::len) else {
+        return;
+    };
+    let mut sums = vec![vec![0.0f32; dim]; clusters];
+    let mut counts = vec![0usize; clusters];
+    for &(unit_index, cluster) in confident {
+        for k in fine_seconds(&units[unit_index], samples_len) {
+            if let Some(v) = fine.get(&k) {
+                for (s, x) in sums[cluster].iter_mut().zip(v) {
+                    *s += x;
+                }
+                counts[cluster] += 1;
+            }
+        }
+    }
+    if counts.iter().any(|&n| n < FINE_MIN_PER_SPEAKER) {
+        return;
+    }
+    for sum in &mut sums {
+        l2_normalize(sum);
+    }
+    let rate = SAMPLE_RATE as usize;
+    for (&k, v) in fine {
+        let (best, d) = sums
+            .iter()
+            .enumerate()
+            .map(|(c, centroid)| (c, cosine_dist(v, centroid)))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+            .unwrap_or((0, 1.0));
+        let weight = FINE_WEIGHT * (1.0 - d).max(0.05);
+        // The frames around the second `k` — one second wide, so each second
+        // votes exactly once for its own stretch.
+        let s0 = (k * rate).saturating_sub(rate / 2);
+        let s1 = k * rate + rate / 2;
+        let f0 = s0.saturating_sub(FRAME_START) / FRAME_SIZE;
+        let f1 = (s1.saturating_sub(FRAME_START) / FRAME_SIZE).min(votes.len());
+        for frame in votes.iter_mut().take(f1).skip(f0) {
+            frame[best] += weight;
+        }
+    }
 }
 
 /// Frame-level winner per frame, collapsed into turns.
@@ -1247,7 +1386,8 @@ mod tests {
             unit(5, vec![(1200, 1350), (1450, 1600)], None),
             unit(5, vec![(1350, 1450)], None),
         ];
-        let (turns, _) = cluster_and_assign(&units, None, [0; 5], 2_000_000, 4.0).expect("cluster");
+        let (turns, _) = cluster_and_assign(&units, None, [0; 5], 2_000_000, 4.0, &HashMap::new())
+            .expect("cluster");
         let at = |frame: usize| {
             let t = frame_offset(0, frame) as f32 / SAMPLE_RATE as f32;
             turns
@@ -1258,6 +1398,24 @@ mod tests {
         };
         assert_ne!(at(1400), at(1300), "the reply is the other speaker");
         assert_eq!(at(1500), at(1300), "the host goes on afterwards");
+    }
+
+    #[test]
+    fn fine_seconds_stay_inside_one_run() {
+        let unit = WindowSpeaker {
+            window: 0,
+            // Frames 0–300 ≈ 5 s of speech, then a long pause, then 1 s: too short.
+            spans: vec![(0, 300), (600, 650)],
+            frames: 350,
+            embedding: None,
+        };
+        let secs = fine_seconds(&unit, 16_000 * 60);
+        assert!(!secs.is_empty());
+        for k in secs {
+            let (a, b) = ((k - 1) * 16_000, (k + 1) * 16_000);
+            assert!(a >= frame_offset(0, 0), "excerpt starts inside the run");
+            assert!(b <= frame_offset(0, 300), "excerpt ends inside the run");
+        }
     }
 
     #[test]
@@ -1580,6 +1738,97 @@ Anker mit bekannter Stimme: {}",
 mod quality {
     use super::*;
     use crate::llm::TranscriptLine;
+
+    /// Can a *short* excerpt be assigned to the right speaker at all? Long units
+    /// are clustered as usual and their cluster is the label; each one is then
+    /// re-embedded as a centred `L`-second excerpt and classified by the nearest
+    /// centroid of the *other* units' `L`-second excerpts (leave one out).
+    /// `VOXMD_SHORT_AUDIO` picks the file, `VOXMD_SHORT_LENS` the lengths.
+    #[test]
+    fn short_excerpt_accuracy() {
+        let Some(path) = std::env::var_os("VOXMD_SHORT_AUDIO") else {
+            return;
+        };
+        let samples = crate::audio::decode_file_to_mono_16k(Path::new(&path), || false)
+            .expect("decode audio");
+        let pcm = to_i16(&samples);
+        onnx_runtime::init(&cache_dir()).expect("ort");
+        let mut extractor = pyannote_rs::EmbeddingExtractor::new(cached(EMB_FILE)).expect("emb");
+        let units = window_speakers(&pcm, SAMPLE_RATE, &cached(SEG_FILE), &|| false).expect("seg");
+        let runs: Vec<_> = units.iter().map(embed_span).collect();
+        let mut embed = |a: usize, b: usize| -> Option<Vec<f32>> {
+            let iter = extractor.compute(&pcm[a..b]).ok()?;
+            let mut v: Vec<f32> = iter.collect();
+            l2_normalize(&mut v);
+            Some(v)
+        };
+        // Long anchors, 6 s, clustered.
+        let mut anchors: Vec<(usize, usize, Vec<f32>)> = Vec::new();
+        for run in runs.iter().flatten() {
+            if let Some((a, b)) = embed_excerpt(run.0, run.1, pcm.len(), 6.0) {
+                if let Some(v) = embed(a, b) {
+                    anchors.push((run.0, run.1, v));
+                }
+            }
+        }
+        let embs: Vec<Vec<f32>> = anchors.iter().map(|a| a.2.clone()).collect();
+        let (labels, _) = agglomerative_cluster(&embs, CLUSTER_DIST, None, AUTO_SPEAKER_CAP);
+        let k = labels.iter().copied().max().map_or(0, |m| m + 1);
+        eprintln!("anchors {} clusters {k}", anchors.len());
+        let lens: Vec<f32> = std::env::var("VOXMD_SHORT_LENS")
+            .unwrap_or_else(|_| "1.5,2,3,4".into())
+            .split(',')
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        for want in lens {
+            let mut pts: Vec<(usize, Vec<f32>, usize)> = Vec::new();
+            for (i, (from, to, _)) in anchors.iter().enumerate() {
+                if let Some((a, b)) = embed_excerpt(*from, *to, pcm.len(), want) {
+                    if let Some(v) = embed(a, b) {
+                        pts.push((labels[i], v, *from));
+                    }
+                }
+            }
+            let mut hit = 0usize;
+            for (i, (lab, v, at)) in pts.iter().enumerate() {
+                let mut best = (f32::MAX, usize::MAX);
+                for c in 0..k {
+                    let others: Vec<&Vec<f32>> = pts
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, p)| *j != i && p.0 == c && p.2.abs_diff(*at) > 1200)
+                        .map(|(_, p)| &p.1)
+                        .collect();
+                    if others.is_empty() {
+                        continue;
+                    }
+                    let mut cen = vec![0.0f32; v.len()];
+                    for o in &others {
+                        for (x, y) in cen.iter_mut().zip(o.iter()) {
+                            *x += y;
+                        }
+                    }
+                    l2_normalize(&mut cen);
+                    let d = cosine_dist(v, &cen);
+                    if d < best.0 {
+                        best = (d, c);
+                    }
+                }
+                if best.1 == *lab {
+                    hit += 1;
+                }
+            }
+            let mut per = vec![0usize; k];
+            for p in &pts {
+                per[p.0] += 1;
+            }
+            eprintln!(
+                "L={want}s  {hit}/{} = {:.1}%  (per cluster {per:?})",
+                pts.len(),
+                100.0 * hit as f32 / pts.len().max(1) as f32
+            );
+        }
+    }
 
     /// Reference labels per line, from the embedder alone: each line's audio is
     /// embedded and matched to hand-verified voice samples. No clustering, so
