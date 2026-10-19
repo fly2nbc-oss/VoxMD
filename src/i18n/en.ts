@@ -109,6 +109,24 @@ export const en = {
   "about.tagline":
     "Transcribe audio to Markdown with local Whisper and your LLM API. Settings and keys stay on this device.",
   "about.repo": "GitHub repository",
+  "update.askTitle": "Check for updates?",
+  "update.askBody": "VoxMD can look once a day whether a newer version has been released.",
+  "update.askHint":
+    "It only reads the number of the latest release from GitHub. Nothing is sent but the request itself, nothing is downloaded or installed, and you can change this any time under Settings ▸ About.",
+  "update.askYes": "Yes, check daily",
+  "update.askNo": "No",
+  "update.notice": "VoxMD {version} is available.",
+  "update.noticeOpen": "Release page",
+  "about.updates": "Check for updates once a day",
+  "about.updatesHint":
+    "Reads only the latest release number from GitHub. Nothing is sent but the request, nothing is downloaded or installed.",
+  "about.updateNever": "Not checked yet.",
+  "about.updateChecking": "Checking…",
+  "about.updateCurrent": "VoxMD is up to date.",
+  "about.updateNewer": "Version {version} is available.",
+  "about.updateFailed": "The check failed. Is there a connection?",
+  "about.updateCheckNow": "Check now",
+  "about.updateRelease": "Release page",
 
   "dictation.microphone": "Microphone",
   "dictation.systemDefault": "System default",

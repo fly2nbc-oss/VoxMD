@@ -9,6 +9,7 @@ mod onnx_runtime;
 mod paths;
 mod pipeline;
 mod podcast;
+mod update;
 mod vulkan_runtime;
 
 use config::AppConfig;
@@ -68,6 +69,13 @@ fn list_whisper_models() -> Vec<ModelInfo> {
 #[tauri::command(async)]
 fn whisper_cache_dir() -> String {
     model_download::cache_dir().to_string_lossy().into_owned()
+}
+
+/// The latest released version, read from GitHub's redirect (see `update.rs`).
+/// Only called when the user has switched the update check on.
+#[tauri::command]
+async fn check_for_update() -> Result<String, String> {
+    update::latest().await
 }
 
 /// File count and total size of the downloaded models.
@@ -204,6 +212,7 @@ pub fn run() {
             list_whisper_models,
             whisper_cache_dir,
             model_cache_stats,
+            check_for_update,
             clear_whisper_cache,
             system_summary_language,
             fetch_podcast_feed,

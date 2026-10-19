@@ -103,6 +103,24 @@ export const fr: Messages = {
   "about.tagline":
     "Transcrivez l’audio en Markdown avec Whisper en local et votre API LLM. Les paramètres et les clés restent sur cet appareil.",
   "about.repo": "Dépôt GitHub",
+  "update.askTitle": "Rechercher les mises à jour ?",
+  "update.askBody": "VoxMD peut vérifier une fois par jour si une version plus récente est sortie.",
+  "update.askHint":
+    "Seul le numéro de la dernière version est lu sur GitHub. Rien n’est envoyé hormis la requête elle-même, rien n’est téléchargé ni installé. Vous pouvez changer cela à tout moment dans Réglages ▸ À propos.",
+  "update.askYes": "Oui, vérifier chaque jour",
+  "update.askNo": "Non",
+  "update.notice": "VoxMD {version} est disponible.",
+  "update.noticeOpen": "Page de la version",
+  "about.updates": "Rechercher les mises à jour une fois par jour",
+  "about.updatesHint":
+    "Lit uniquement le numéro de la dernière version sur GitHub. Rien n’est envoyé hormis la requête, rien n’est téléchargé ni installé.",
+  "about.updateNever": "Pas encore vérifié.",
+  "about.updateChecking": "Vérification…",
+  "about.updateCurrent": "VoxMD est à jour.",
+  "about.updateNewer": "La version {version} est disponible.",
+  "about.updateFailed": "La vérification a échoué. Y a-t-il une connexion ?",
+  "about.updateCheckNow": "Vérifier maintenant",
+  "about.updateRelease": "Page de la version",
 
   "dictation.microphone": "Microphone",
   "dictation.systemDefault": "Périphérique par défaut",

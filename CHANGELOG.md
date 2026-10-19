@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+### Added
+
+- **Update check, only if you agree** – the first time the window stands still, VoxMD asks once whether it may look for a new version; until you say yes it never does. Then it asks GitHub once a day which release is the latest: one request whose redirect names the version (only the `Location` header is read; no API, no body), User-Agent just `VoxMD`, nothing about you or your files is sent. A newer version gets one hint per version – top centre, with a link to its release page; nothing is downloaded or installed. *Settings ▸ About* shows the state, switches the check on or off and has *Check now*. The README has a new *Privacy* section.
+
+### Changed
+
+- **Short replies get their own speaker.** A reply of a few seconds is too short for the speaker model to fingerprint, so it used to disappear into the longer turn around it – on a test episode the guest's three-second greeting at 00:50 read as the host's. Within one analysis window the two speakers are different people, so a short reply now takes the speaker the longer voice did not. On the same episode the first half hour went from 25 to 39 speaker turns; the new ones are the host's short questions.
+- **Speaker changes inside a Whisper line are honoured.** Whisper segments run to ten seconds and more, so a short reply used to ride along with the longer turn around it. Lines are now cut at the turn boundaries they contain (text split in proportion to the time, snapped to a word break, pieces under 1.5 s kept whole). Lines without a clear change come out unchanged.
+- **A new look, the same VoxMD** – the interface follows version 2.0 of the author's design system: neutral grey dark surfaces instead of blue-grey, bars flush with the window edge and divided by a line (no cards with shadows around them), 32 px for every control, corners and lines on one scale (dialogs 12 px), blue means "on" and no longer "under the pointer", filled buttons use a darker blue so white text reaches 4.5:1, borders of fields reach 3:1, a 2 px focus ring on every control, segment groups and the Queue/Dictation switch as one framed group, icons in 16/20/24/32 px, Noto Sans on Linux.
+
+### Fixed
+
+- **The failure panel above the queue had no styling at all** – it now has a tinted band with the full, untruncated messages.
+- **A focused button or icon button picked up the status footer's layout rules** (a stray comma in the stylesheet joined their selectors).
+
 ## [1.1.0] - 2026-08-22
 
 ### Added

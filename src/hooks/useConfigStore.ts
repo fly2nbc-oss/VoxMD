@@ -2,6 +2,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultConfig } from "../defaults";
 import { CONFIG_KEY, mergeConfig, QUEUE_KEY, STORE_FILE } from "../lib/configStore";
+import { UPDATE_KEY } from "../lib/update";
 import { toMsg } from "../lib/jobs";
 import type { AppConfig, QueueItem } from "../types";
 
@@ -18,6 +19,9 @@ export interface ConfigStore {
   revert: () => void;
   loadQueue: () => Promise<unknown>;
   saveQueue: (items: QueueItem[]) => Promise<void>;
+  /** Update-check bookkeeping lives beside the settings, not in them: the backend never needs it. */
+  loadUpdates: () => Promise<unknown>;
+  saveUpdates: (state: unknown) => Promise<void>;
   ready: boolean;
   loadError: string;
 }
@@ -93,5 +97,30 @@ export function useConfigStore(): ConfigStore {
     await store.save();
   }, []);
 
-  return { config, saved, setConfig, persist, revert, loadQueue, saveQueue, ready, loadError };
+  const loadUpdates = useCallback(async () => {
+    const store =
+      storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
+    return store.get(UPDATE_KEY);
+  }, []);
+
+  const saveUpdates = useCallback(async (state: unknown) => {
+    const store =
+      storeRef.current ?? (await Store.load(STORE_FILE, { autoSave: true, defaults: {} }));
+    await store.set(UPDATE_KEY, state);
+    await store.save();
+  }, []);
+
+  return {
+    config,
+    saved,
+    setConfig,
+    persist,
+    revert,
+    loadQueue,
+    saveQueue,
+    loadUpdates,
+    saveUpdates,
+    ready,
+    loadError,
+  };
 }

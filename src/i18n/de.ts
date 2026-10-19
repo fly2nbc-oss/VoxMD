@@ -103,6 +103,24 @@ export const de: Messages = {
   "about.tagline":
     "Audio mit lokalem Whisper und deiner LLM-API nach Markdown transkribieren. Einstellungen und Schlüssel bleiben auf diesem Gerät.",
   "about.repo": "GitHub-Repository",
+  "update.askTitle": "Nach Updates suchen?",
+  "update.askBody": "VoxMD kann einmal am Tag nachsehen, ob eine neuere Version erschienen ist.",
+  "update.askHint":
+    "Gelesen wird nur die Nummer der neuesten Version von GitHub. Außer der Anfrage selbst wird nichts gesendet, nichts heruntergeladen oder installiert. Ändern lässt sich das jederzeit unter Einstellungen ▸ Über.",
+  "update.askYes": "Ja, täglich prüfen",
+  "update.askNo": "Nein",
+  "update.notice": "VoxMD {version} ist erschienen.",
+  "update.noticeOpen": "Seite der Version",
+  "about.updates": "Einmal am Tag nach Updates suchen",
+  "about.updatesHint":
+    "Liest nur die Nummer der neuesten Version von GitHub. Außer der Anfrage wird nichts gesendet, nichts heruntergeladen oder installiert.",
+  "about.updateNever": "Noch nicht geprüft.",
+  "about.updateChecking": "Prüfe …",
+  "about.updateCurrent": "VoxMD ist auf dem neuesten Stand.",
+  "about.updateNewer": "Version {version} ist erschienen.",
+  "about.updateFailed": "Die Prüfung ist fehlgeschlagen. Besteht eine Verbindung?",
+  "about.updateCheckNow": "Jetzt prüfen",
+  "about.updateRelease": "Seite der Version",
 
   "dictation.microphone": "Mikrofon",
   "dictation.systemDefault": "Systemstandard",

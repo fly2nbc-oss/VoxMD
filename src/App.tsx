@@ -11,6 +11,8 @@ import { PodcastDialog } from "./components/PodcastDialog";
 import { QueueTable } from "./components/QueueTable";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { StatusBar } from "./components/StatusBar";
+import { UpdateNotice } from "./components/UpdateNotice";
+import { UpdateQuestion } from "./components/UpdateQuestion";
 import { defaultConfig } from "./defaults";
 import { useBatchEvents } from "./hooks/useBatchEvents";
 import { useConfigStore } from "./hooks/useConfigStore";
@@ -18,6 +20,7 @@ import { useDictationEvents } from "./hooks/useDictationEvents";
 import { useHotkeys } from "./hooks/useHotkeys";
 import { useNativeDrop } from "./hooks/useNativeDrop";
 import { useTheme } from "./hooks/useTheme";
+import { useUpdates } from "./hooks/useUpdates";
 import { I18nContext, useI18nValue } from "./i18n/I18nProvider";
 import { rememberPodcastRecent } from "./lib/configStore";
 import { summaryWouldRun } from "./lib/llmProviders";
@@ -44,6 +47,8 @@ export default function App() {
     revert,
     loadQueue,
     saveQueue,
+    loadUpdates,
+    saveUpdates,
     ready: storeReady,
     loadError,
   } = useConfigStore();
@@ -84,6 +89,7 @@ export default function App() {
   const [saveError, setSaveError] = useState("");
 
   const [podcastOpen, setPodcastOpen] = useState(false);
+  const updates = useUpdates(storeReady, settingsOpen || podcastOpen, loadUpdates, saveUpdates);
   const [feedUrl, setFeedUrl] = useState("");
   const [podcastDir, setPodcastDir] = useState("");
   const [feedBusy, setFeedBusy] = useState(false);
@@ -658,7 +664,7 @@ export default function App() {
         {dragActive && mode === "queue" ? (
           <div className="drop-overlay" aria-hidden>
             <div className="drop-overlay-inner">
-              <FileAudio2 size={40} aria-hidden />
+              <FileAudio2 size={32} aria-hidden />
               <p>{t("queue.dropHint")}</p>
             </div>
           </div>
@@ -753,7 +759,15 @@ export default function App() {
             vulkanAvailable={vulkanAvailable}
             themeMode={themeMode}
             onThemeChange={setThemeMode}
+            updates={updates}
           />
+        ) : null}
+
+        {updates.asking && !settingsOpen && !podcastOpen ? (
+          <UpdateQuestion onAnswer={updates.answer} />
+        ) : null}
+        {updates.notice ? (
+          <UpdateNotice version={updates.notice} onClose={updates.dismissNotice} />
         ) : null}
       </div>
     </I18nContext.Provider>

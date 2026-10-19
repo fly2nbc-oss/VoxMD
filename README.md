@@ -20,6 +20,7 @@ VoxMD is a **Tauri v2** desktop application (Rust backend, React/TypeScript fron
 - [Supported Platforms & Formats](#supported-platforms--formats)
 - [Development & Build](#development--build)
 - [Releases](#releases)
+- [Privacy](#privacy)
 - [Troubleshooting](#troubleshooting)
 - [Roadmap & Known Issues](#roadmap--known-issues)
 - [Contributing](#contributing)
@@ -43,7 +44,8 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 - **Speaker labels** (optional): pyannote ONNX diarization after Whisper. Transcript lines become `[HH:MM:SS] **Speaker N:** text`.
 - **Dictation mode**: live microphone transcription with a separate (usually smaller) Whisper model. With an API key, **Improve** and **Translate** rewrite the dictation text; keep or discard the suggestion.
 - **Progress**: Per-file **Status** badge plus **Details** (download / transcription / speakers / summary); footer shows overall queue progress and optional model-download progress.
-- **English UI** with System / Light / Dark appearance; **About** via the toolbar info icon; **delete-audio toggle** (trash) deletes audio after a successful export — Markdown is always kept.
+- **UI in English, German, French, Italian and Spanish** (or follow the system) with System / Light / Dark appearance, following the author's UI design system v2.0; **About** is the last entry in Settings; **delete-audio toggle** (trash) deletes audio after a successful export — Markdown is always kept.
+- **Update check, only if you agree**: VoxMD asks once whether it may look for a new version (*Settings ▸ About* switches it on or off). A newer version is named with a link to its page; nothing is downloaded or installed. See [Privacy](#privacy).
 - **Keyboard shortcuts**: F5 start / record, Esc cancel / stop, Ctrl+O files, Ctrl+, settings, Ctrl+1 queue, Ctrl+2 dictation (ignored while typing or a dialog is open).
 - **Settings**: Summary (LLM) provider / API, Whisper model / language / GPU, prevent-sleep, speakers, dictation model / microphone, Appearance — persisted via `@tauri-apps/plugin-store`. Without an API key, the summary is skipped and VoxMD runs fully offline.
 - **Whisper models**: Preset names (e.g. `turbo`) download from Hugging Face into `~/.cache/voxmd/whisper/`; **Custom path…** + **Choose…** for a local `.bin` / `.gguf`.
@@ -71,7 +73,7 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 | Files / Podcast / Remove / Start | Queue management; Start uses the selection when any rows are checked (F5). Files and Podcast stay available during a run and append to it. |
 | Metadata / Summary / Transcript | Markdown sections to include (icons) |
 | Trash | When active (red): delete **audio** after a successful `.md` write (local files and podcast downloads). **Markdown is never deleted.** Default: off (keep audio) |
-| Settings / About | Settings drawer (Ctrl+,); About dialog |
+| Settings | Settings drawer (Ctrl+,); About is its last entry |
 
 ### Settings (gear icon)
 
@@ -80,7 +82,8 @@ Dark mode uses the same layout; theme preference is System / Light / Dark in Set
 | **Summary (LLM)** | Provider, API key (+ Verify), base URL, model, summary language | Deepseek and OpenRouter fill the base URL; Custom leaves URL and model as free text. OpenRouter lists chat models for a dropdown. Used only when Summary is enabled in the toolbar. Base URL is the endpoint root (without `/chat/completions`). Summary language: System or ISO. |
 | **Transcription (Whisper)** | Model, language, Use GPU, prevent sleep, speaker labels | Preset or **Custom path…**. Language: Auto-detect (default) or ISO. GPU needs a Vulkan-capable build + loader. Prevent-sleep holds an idle-inhibit lock for a batch. Speaker labels download two ONNX models (~32 MB) into `~/.cache/voxmd/diarize/` on first use. |
 | **Dictation** | Model, default microphone | Separate Whisper weights for live capture. Smaller presets (e.g. `small`) keep memory next to a large batch model. |
-| **Appearance** | System / Light / Dark | Applied immediately. Shortcut list is shown here. |
+| **Appearance** | Theme (System / Light / Dark), interface language | Applied immediately. Shortcut list is shown here. |
+| **About** | Version, update check, credits | The update check is off until you agree; the switch and *Check now* apply immediately, without Save. |
 
 LLM sampling is fixed internally (temperature 0.3, generous token limit) and Whisper thread count is auto-detected — these are not settings.
 
@@ -162,7 +165,16 @@ Tags matching `v*` trigger [.github/workflows/tauri-release.yml](.github/workflo
 | `SHA256SUMS-linux.txt` | Hashes for the `.deb` and the `.AppImage` |
 | `SHA256SUMS-windows.txt` | Hashes for the NSIS setup and the portable `VoxMD.exe` |
 
-VoxMD does **not** ship an in-app auto-updater. New versions are announced via GitHub Releases; integrity is checked against the SHA-256 sums above. (The mono-repo convention of publishing a Tauri `latest.json` / updater manifest does not apply here.)
+VoxMD does **not** ship an in-app updater. With the [update check](#privacy) switched on it only *names* a newer version and links to its release page; you download it from GitHub Releases yourself and check it against the SHA-256 sums above. (The mono-repo convention of publishing a Tauri `latest.json` / updater manifest does not apply here.)
+
+## Privacy
+
+VoxMD works on your computer. Your audio, transcripts and settings never leave it, and there is no telemetry. The only things that touch the network are the ones you set up or ask for:
+
+- **Update check, only if you agree:** the first time the window stands still VoxMD asks whether it may look for a new version; until you say yes it never does. Then it asks GitHub once a day which release is the latest — one request to `github.com/fly2nbc-oss/VoxMD/releases/latest`, whose redirect names the version, read from the `Location` header alone. Nothing about you, your computer or your files is sent; the request says only that it comes from "VoxMD". GitHub sees your IP address, as with any website. A newer version is only named; nothing is downloaded or installed. *Settings ▸ About* turns it on or off and checks on demand.
+- **Downloads you trigger:** Whisper models (Hugging Face), the speaker models and ONNX Runtime (on the first run with speaker labels), podcast feeds and episodes — only when you start them.
+- **The LLM you configure:** with an API key (or a local server such as Ollama), the transcript goes to *that* endpoint for the summary, **Improve** and **Translate**. Without a key nothing is sent.
+- **Links you click:** the repository and the credits in *Settings ▸ About* open in your browser only on a click.
 
 ## Troubleshooting
 

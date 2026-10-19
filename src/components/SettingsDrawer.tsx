@@ -25,6 +25,8 @@ import {
 import { asMaxSpeakers, isSummarySystemLanguage, isTranscriptionAuto } from "../lib/configStore";
 import { CREDITS } from "../lib/credits";
 import { formatBytes, toMsg } from "../lib/jobs";
+import { releaseUrl } from "../lib/update";
+import type { Updates } from "../hooks/useUpdates";
 import {
   applyProvider,
   isLocalEndpoint,
@@ -92,6 +94,8 @@ interface Props {
   vulkanAvailable: boolean | null;
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
+  /** Update check: switch, status, "check now". Applied at once, not part of the Save flow. */
+  updates: Updates;
 }
 
 export function SettingsDrawer({
@@ -115,6 +119,7 @@ export function SettingsDrawer({
   vulkanAvailable,
   themeMode,
   onThemeChange,
+  updates,
 }: Props) {
   const { t, tn } = useT();
   const set = <K extends keyof AppConfig>(key: K, value: AppConfig[K]) =>
@@ -638,7 +643,7 @@ export function SettingsDrawer({
               disabled={clearingCache || cacheFiles === 0}
               onClick={onClearCache}
             >
-              {clearingCache ? <Loader2 size={13} className="icon spin" aria-hidden /> : null}
+              {clearingCache ? <Loader2 size={16} className="icon spin" aria-hidden /> : null}
               {clearingCache ? t("settings.clearingCache") : t("settings.freeSpace")}
             </button>
           </div>
@@ -709,7 +714,7 @@ export function SettingsDrawer({
                 onClick={() => void verifyKey()}
                 title={t("settings.verifyTitle")}
               >
-                {verifying ? <Loader2 size={13} className="icon spin" aria-hidden /> : null}
+                {verifying ? <Loader2 size={16} className="icon spin" aria-hidden /> : null}
                 {verifying ? t("settings.verifying") : t("settings.verify")}
               </button>
             </div>
@@ -827,6 +832,49 @@ export function SettingsDrawer({
           </span>
         </header>
 
+        <div className="field" data-field="updates">
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={updates.enabled}
+              onChange={(e) => updates.setEnabled(e.target.checked)}
+            />
+            <span>{t("about.updates")}</span>
+          </label>
+          <p className="field-hint">{t("about.updatesHint")}</p>
+          <div className="update-status">
+            <span aria-live="polite">
+              {updates.status === "checking"
+                ? t("about.updateChecking")
+                : updates.status === "failed"
+                  ? t("about.updateFailed")
+                  : updates.status === "newer" && updates.latest
+                    ? t("about.updateNewer", { version: updates.latest })
+                    : updates.status === "current"
+                      ? t("about.updateCurrent")
+                      : t("about.updateNever")}
+            </span>
+            {updates.status === "newer" && updates.latest ? (
+              <button
+                type="button"
+                className="link-btn"
+                title={releaseUrl(updates.latest)}
+                onClick={() => void openUrl(releaseUrl(updates.latest ?? ""))}
+              >
+                {t("about.updateRelease")}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled={updates.status === "checking" || !updates.version}
+              onClick={updates.checkNow}
+            >
+              {t("about.updateCheckNow")}
+            </button>
+          </div>
+        </div>
+
         <div className="credits">
           {CREDITS.map((group) => (
             <section className="credits-group" key={group.title}>
@@ -868,7 +916,7 @@ export function SettingsDrawer({
       <div className="settings-layout">
         <div className="settings-rail">
           <div className="settings-search">
-            <Search size={15} aria-hidden />
+            <Search size={16} aria-hidden />
             <input
               className="input"
               value={query}
@@ -884,7 +932,7 @@ export function SettingsDrawer({
                 aria-label={t("settings.searchClear")}
                 onClick={() => setQuery("")}
               >
-                <X size={14} aria-hidden />
+                <X size={16} aria-hidden />
               </button>
             ) : null}
           </div>
@@ -961,11 +1009,11 @@ export function SettingsDrawer({
         >
           {saveState === "saved" ? (
             <>
-              <Check size={15} aria-hidden /> {t("common.saved")}
+              <Check size={16} aria-hidden /> {t("common.saved")}
             </>
           ) : saveState === "saving" ? (
             <>
-              <Loader2 size={14} className="icon spin" aria-hidden /> {t("common.saving")}
+              <Loader2 size={16} className="icon spin" aria-hidden /> {t("common.saving")}
             </>
           ) : (
             t("common.save")
