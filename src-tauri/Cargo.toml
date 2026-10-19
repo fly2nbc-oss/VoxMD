@@ -1,6 +1,6 @@
 [package]
 name = "voxmd"
-version = "1.2.0"
+version = "1.2.1"
 description = "Transcribe audio and podcast episodes to Markdown with local Whisper and an LLM summary"
 authors = ["VoxMD contributors"]
 license = "Apache-2.0"
