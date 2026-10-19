@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-19
+
+Includes everything listed under 1.1.0, which was never tagged.
+
 ### Added
 
 - **Update check, only if you agree** – the first time the window stands still, VoxMD asks once whether it may look for a new version; until you say yes it never does. Then it asks GitHub once a day which release is the latest: one request whose redirect names the version (only the `Location` header is read; no API, no body), User-Agent just `VoxMD`, nothing about you or your files is sent. A newer version gets one hint per version – top centre, with a link to its release page; nothing is downloaded or installed. *Settings ▸ About* shows the state, switches the check on or off and has *Check now*. The README has a new *Privacy* section.
