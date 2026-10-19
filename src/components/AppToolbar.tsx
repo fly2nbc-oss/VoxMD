@@ -89,7 +89,7 @@ export function AppToolbar({
           title={dictating ? t("toolbar.queueBlocked") : t("toolbar.queueTitle")}
           onClick={() => onModeChange("queue")}
         >
-          <List size={14} aria-hidden />
+          <List size={16} aria-hidden />
           {t("toolbar.queue")}
         </button>
         <button
@@ -101,7 +101,7 @@ export function AppToolbar({
           title={processing ? t("toolbar.dictationBlocked") : t("toolbar.dictationTitle")}
           onClick={() => onModeChange("dictation")}
         >
-          <Mic size={14} aria-hidden />
+          <Mic size={16} aria-hidden />
           {t("toolbar.dictation")}
         </button>
       </div>
@@ -114,7 +114,7 @@ export function AppToolbar({
             onClick={onPickFiles}
             title={processing ? t("toolbar.filesTitleRunning") : t("toolbar.filesTitle")}
           >
-            <FileAudio2 size={18} aria-hidden />
+            <FileAudio2 size={20} aria-hidden />
             <span>{t("toolbar.files")}</span>
           </button>
           <button
@@ -123,7 +123,7 @@ export function AppToolbar({
             onClick={onOpenPodcast}
             title={processing ? t("toolbar.podcastTitleRunning") : t("toolbar.podcastTitle")}
           >
-            <Rss size={18} aria-hidden />
+            <Rss size={20} aria-hidden />
             <span>{t("toolbar.podcast")}</span>
           </button>
           <button
@@ -133,7 +133,7 @@ export function AppToolbar({
             onClick={onRemoveSelected}
             title={t("toolbar.removeTitle")}
           >
-            <ListX size={18} aria-hidden />
+            <ListX size={20} aria-hidden />
             <span>
               {t("toolbar.remove")}
               {suffix}
@@ -156,7 +156,7 @@ export function AppToolbar({
                   : t("toolbar.startTitleAll")
             }
           >
-            <Play size={18} aria-hidden />
+            <Play size={20} aria-hidden />
             <span>
               {t("toolbar.start")}
               {suffix}
@@ -171,7 +171,7 @@ export function AppToolbar({
               disabled={cancelling}
               onClick={onCancel}
             >
-              <CircleStop size={22} aria-hidden />
+              <CircleStop size={24} aria-hidden />
             </button>
           ) : null}
         </div>
@@ -231,7 +231,7 @@ export function AppToolbar({
           aria-label={t("toolbar.settings")}
           onClick={onOpenSettings}
         >
-          <Settings className="icon" size={22} aria-hidden />
+          <Settings className="icon" size={24} aria-hidden />
         </button>
       </div>
     </header>

@@ -254,11 +254,11 @@ export function DictationView({
                 setProposal(null);
               }}
             >
-              <Check size={14} aria-hidden />
+              <Check size={16} aria-hidden />
               {t("dictation.keep")}
             </button>
             <button type="button" className="btn-secondary btn-sm" onClick={() => setProposal(null)}>
-              <X size={14} aria-hidden />
+              <X size={16} aria-hidden />
               {t("dictation.discard")}
             </button>
           </div>
@@ -272,7 +272,7 @@ export function DictationView({
           disabled={!displayText}
           onClick={() => void copyAll()}
         >
-          {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
+          {copied ? <Check size={16} aria-hidden /> : <Copy size={16} aria-hidden />}
           <span>{copied ? t("dictation.copied") : t("dictation.copy")}</span>
         </button>
         <button
@@ -285,7 +285,7 @@ export function DictationView({
             setProposal(null);
           }}
         >
-          <Eraser size={14} aria-hidden />
+          <Eraser size={16} aria-hidden />
           <span>{t("dictation.clear")}</span>
         </button>
 
@@ -299,9 +299,9 @@ export function DictationView({
               title={t("dictation.improveTitle")}
             >
               {aiBusy === "improve" ? (
-                <Loader2 size={14} className="icon spin" aria-hidden />
+                <Loader2 size={16} className="icon spin" aria-hidden />
               ) : (
-                <Sparkles size={14} aria-hidden />
+                <Sparkles size={16} aria-hidden />
               )}
               <span>{t("dictation.improve")}</span>
             </button>
@@ -327,9 +327,9 @@ export function DictationView({
               onClick={() => void runAi("translate")}
             >
               {aiBusy === "translate" ? (
-                <Loader2 size={14} className="icon spin" aria-hidden />
+                <Loader2 size={16} className="icon spin" aria-hidden />
               ) : (
-                <Languages size={14} aria-hidden />
+                <Languages size={16} aria-hidden />
               )}
               <span>{t("dictation.translate")}</span>
             </button>

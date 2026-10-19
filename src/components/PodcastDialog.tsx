@@ -99,7 +99,7 @@ export function PodcastDialog({
                   disabled={busy}
                   onClick={() => onRemoveRecent(recent.feedUrl)}
                 >
-                  <Trash2 size={15} aria-hidden />
+                  <Trash2 size={16} aria-hidden />
                 </button>
               </li>
             ))}
@@ -119,7 +119,7 @@ export function PodcastDialog({
           disabled={busy || !feedUrl.trim() || !outputDir.trim()}
           onClick={onSubmit}
         >
-          {busy ? <Loader2 size={14} className="icon spin" aria-hidden /> : null}
+          {busy ? <Loader2 size={16} className="icon spin" aria-hidden /> : null}
           {busy ? t("common.loading") : t("podcast.submit")}
         </button>
       </div>

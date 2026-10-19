@@ -62,7 +62,7 @@ export function StatusBar({
           <span className="mono">{`${modelDownload.pct}%`}</span>
         ) : processing ? (
           <>
-            <Loader2 size={14} className="icon spin" aria-hidden />
+            <Loader2 size={16} className="icon spin" aria-hidden />
             <span>{cancelling ? t("status.cancelling") : t("status.running")}</span>
           </>
         ) : (

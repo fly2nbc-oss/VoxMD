@@ -113,7 +113,7 @@ export function Modal({
             aria-label={t("common.close")}
             onClick={onClose}
           >
-            <X size={18} aria-hidden />
+            <X size={20} aria-hidden />
           </button>
         </div>
         <div className={`drawer-body${bodyClassName ? ` ${bodyClassName}` : ""}`}>{children}</div>

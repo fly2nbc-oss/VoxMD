@@ -37,13 +37,13 @@ export function ActiveJobs({ jobs }: Props) {
         const pct = jobPercent(job);
         return (
           <div className="active-job" key={job.path}>
-            <Icon size={18} aria-hidden />
+            <Icon size={20} aria-hidden />
             <span className="active-job-text">
               <span className="active-job-name mono">{job.displayName}</span>
               <span className="active-job-stage">{detailsForRow(job, t)}</span>
             </span>
             {pct == null ? (
-              <Loader2 size={15} className="icon spin active-job-spinner" aria-hidden />
+              <Loader2 size={16} className="icon spin active-job-spinner" aria-hidden />
             ) : (
               <div
                 className="progress-track active-job-progress"
