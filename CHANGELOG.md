@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), version
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-20
+
 ### Security
 
 - **Dependencies brought up to date, and `cargo audit` is clean again.** `rustls` 0.23.46 fixes four advisories (TLS 1.3 handshake handling, a key-exchange downgrade, secrets in `Debug` output, certificate decompression) that affected every download and the LLM connection; `zip` 9 fixes three extraction advisories (VoxMD only ever reads one member into memory, so it was not exploitable here); `quinn-proto` 0.11.19 fixes five QUIC advisories (whether VoxMD's HTTPS downloads reach that code was not checked). Tauri, its plugins and the matching npm packages move together to 2.12 (the Tauri CLI refuses a minor-version mismatch between crate and package). `ort` stays at `=2.0.0-rc.10`. `npm audit` is clean too (Vitest 4).
