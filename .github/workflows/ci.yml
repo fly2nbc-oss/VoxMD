@@ -314,5 +314,6 @@ jobs:
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v7
         with:
+          retention-days: 7
           name: voxmd-windows-amd64-portable-exe
           path: portable-dist/VoxMD.exe
