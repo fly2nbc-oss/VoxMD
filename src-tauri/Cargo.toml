@@ -79,7 +79,7 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = [
 # and checking its published hash.
 flate2 = "1"
 tar = "0.4"
-sha2 = "0.10"
+sha2 = "0.11"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # Same ndarray as pyannote-rs/ort — used by our local segmentation (upstream 0.3.4
 # feeds raw i16 to the ONNX model, so every frame looks like non-speech).
