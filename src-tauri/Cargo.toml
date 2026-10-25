@@ -89,7 +89,7 @@ ndarray = "0.16"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 feed-rs = "2"
 futures = "0.3"
-dirs = "6"
+dirs = "7"
 sys-locale = "0.3"
 
 # Release: smaller binary and faster Whisper inference matter more than link time.
