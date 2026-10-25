@@ -31,7 +31,7 @@ tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "fs", 
 whisper-rs = { version = "0.16", default-features = false }
 # Only the chat-completion API is used; 0.41 ships every other endpoint behind
 # its own feature and enables none of them by default.
-async-openai = { version = "0.41", default-features = false, features = [
+async-openai = { version = "0.42", default-features = false, features = [
     "rustls",
     "chat-completion",
 ] }
