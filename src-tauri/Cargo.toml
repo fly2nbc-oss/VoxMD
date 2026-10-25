@@ -87,7 +87,7 @@ ndarray = "0.16"
 # 0.13 renamed the `rustls-tls` feature to `rustls`. Kept in lockstep with
 # async-openai so the binary links one HTTP stack, not two.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
-feed-rs = "2"
+feed-rs = "3"
 futures = "0.3"
 dirs = "6"
 sys-locale = "0.3"
